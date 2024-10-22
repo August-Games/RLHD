@@ -19058,6 +19058,24 @@
     ]
   },
   {
+    "description": "HARD_MODE_CERBERUS",
+    "height": 100,
+    "alignment": "CENTER",
+    "radius": 800,
+    "strength": 30,
+    "color": [
+      163,
+      27,
+      6
+    ],
+    "type": "PULSE",
+    "duration": 5000,
+    "range": 20,
+    "npcIds": [
+      15206
+    ]
+  },
+  {
     "description": "TEMPOROSS",
     "height": 250,
     "alignment": "CENTER",
@@ -26865,6 +26883,95 @@
     "fadeOutDuration": 175,
     "graphicsObjectIds": [
       2125
+    ]
+  },
+  {
+    "description": "Necrotic Shadow Projectile",
+    "alignment": "CENTER",
+    "height": -100,
+    "radius": 200,
+    "strength": 20,
+    "color": "#35b0d6",
+    "type": "FLICKER",
+    "duration": 0,
+    "range": 30,
+    "spawnDelay": 700,
+    "fadeInDuration": 400,
+    "fadeOutDuration": 600,
+    "projectileIds": [
+      4951
+    ]
+  },
+  {
+    "description": "Necrotic Shadow Cast",
+    "alignment": "CENTER",
+    "height": 210,
+    "radius": 250,
+    "fixedDespawnTime": false,
+    "strength": 15,
+    "color": "#35b0d6",
+    "type": "FLICKER",
+    "duration": 0,
+    "range": 0,
+    "spawnDelay": 700,
+    "despawnDelay": 25,
+    "fadeInDuration": 100,
+    "fadeOutDuration": 175,
+    "graphicsObjectIds": [
+      4952
+    ]
+  },
+  {
+    "description": "Phantasm Shadow Projectile",
+    "alignment": "CENTER",
+    "height": -100,
+    "radius": 200,
+    "strength": 20,
+    "color": "#07cc94",
+    "type": "FLICKER",
+    "duration": 0,
+    "range": 30,
+    "spawnDelay": 700,
+    "fadeInDuration": 400,
+    "fadeOutDuration": 600,
+    "projectileIds": [
+      4954
+    ]
+  },
+  {
+    "description": "Phantasm Shadow Cast",
+    "alignment": "CENTER",
+    "height": 210,
+    "radius": 250,
+    "fixedDespawnTime": false,
+    "strength": 15,
+    "color": "#07cc94",
+    "type": "FLICKER",
+    "duration": 0,
+    "range": 0,
+    "spawnDelay": 700,
+    "despawnDelay": 25,
+    "fadeInDuration": 100,
+    "fadeOutDuration": 175,
+    "graphicsObjectIds": [
+      4955
+    ]
+  },
+  {
+    "description": "Luminary Set Proc Projectile",
+    "alignment": "CENTER",
+    "height": -100,
+    "radius": 200,
+    "strength": 20,
+    "color": "#ffde00",
+    "type": "FLICKER",
+    "duration": 0,
+    "range": 30,
+    "spawnDelay": 700,
+    "fadeInDuration": 400,
+    "fadeOutDuration": 600,
+    "projectileIds": [
+      4948
     ]
   },
   {
