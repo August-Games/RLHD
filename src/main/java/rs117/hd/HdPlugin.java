@@ -2570,7 +2570,8 @@ public class HdPlugin extends Plugin implements DrawCallbacks {
 		configShadowMode = config.shadowMode();
 		configShadowsEnabled = configShadowMode != ShadowMode.OFF;
 		configGroundTextures = config.groundTextures();
-		configGroundBlending = config.groundBlending();
+//		configGroundBlending = config.groundBlending();
+		configGroundBlending = false;
 		configModelTextures = config.modelTextures();
 		configTzhaarHD = config.hdTzHaarReskin();
 		configProjectileLights = config.projectileLights();
