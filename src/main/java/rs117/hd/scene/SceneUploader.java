@@ -469,7 +469,7 @@ public class SceneUploader {
 					tile,
 					ModelHash.packUuid(ModelHash.TYPE_GROUND_OBJECT, groundObject.getId()),
 					(Model) renderable,
-					HDUtils.getModelPreOrientation(groundObject.getConfig())
+					HDUtils.getBakedOrientation(groundObject.getConfig())
 				);
 			}
 		}
@@ -477,7 +477,7 @@ public class SceneUploader {
 		DecorativeObject decorativeObject = tile.getDecorativeObject();
 		if (decorativeObject != null) {
 			Renderable renderable = decorativeObject.getRenderable();
-			int orientation = HDUtils.getModelPreOrientation(decorativeObject.getConfig());
+			int orientation = HDUtils.getBakedOrientation(decorativeObject.getConfig());
 			if (renderable instanceof Model) {
 				uploadModel(
 					sceneContext,
@@ -511,7 +511,7 @@ public class SceneUploader {
 					tile,
 					ModelHash.packUuid(ModelHash.TYPE_GAME_OBJECT, gameObject.getId()),
 					(Model) gameObject.getRenderable(),
-					HDUtils.getModelPreOrientation(gameObject.getConfig())
+					HDUtils.getBakedOrientation(gameObject.getConfig())
 				);
 			}
 		}

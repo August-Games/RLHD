@@ -577,10 +577,9 @@ public class TileInfoOverlay extends Overlay implements MouseListener, MouseWhee
 		var decorObject = tile.getDecorativeObject();
 		if (decorObject != null) {
 			lines.add(String.format(
-				"Decor Object: %s preori=%d ori=%d offset=[%d, %d] type=%s %s",
+				"Decor Object: %s preori=%d offset=[%d, %d] type=%s %s",
 				getIdAndImpostorId(decorObject, decorObject.getRenderable()),
-				HDUtils.getModelPreOrientation(decorObject.getConfig()),
-				HDUtils.getModelOrientation(decorObject.getConfig()),
+				HDUtils.getBakedOrientation(decorObject.getConfig()),
 				decorObject.getXOffset(),
 				decorObject.getYOffset(),
 				ObjectType.fromConfig(decorObject.getConfig()),
@@ -592,10 +591,9 @@ public class TileInfoOverlay extends Overlay implements MouseListener, MouseWhee
 		GroundObject groundObject = tile.getGroundObject();
 		if (groundObject != null) {
 			lines.add(String.format(
-				"Ground Object: %s preori=%d ori=%d%s",
+				"Ground Object: %s preori=%d%s",
 				getIdAndImpostorId(groundObject, groundObject.getRenderable()),
-				HDUtils.getModelPreOrientation(groundObject.getConfig()),
-				HDUtils.getModelOrientation(groundObject.getConfig()),
+				HDUtils.getBakedOrientation(groundObject.getConfig()),
 				getModelInfo(groundObject.getRenderable())
 			));
 			lines.add("Ground Type: " + ObjectType.fromConfig(groundObject.getConfig()));
@@ -605,20 +603,18 @@ public class TileInfoOverlay extends Overlay implements MouseListener, MouseWhee
 		if (wallObject != null) {
 			if (wallObject.getRenderable1() != null) {
 				lines.add(String.format(
-					"Wall Object 1: %s bakedOri=%d ori=%d wallori=%d%s",
+					"Wall Object 1: %s bakedOri=%d ori=%d%s",
 					getIdAndImpostorId(wallObject, wallObject.getRenderable1()),
-					HDUtils.getModelPreOrientation(wallObject.getConfig()),
-					HDUtils.getModelOrientation(wallObject.getConfig()),
+					HDUtils.getBakedOrientation(wallObject.getConfig()),
 					wallObject.getOrientationA(),
 					getModelInfo(wallObject.getRenderable1())
 				));
 			}
 			if (wallObject.getRenderable2() != null) {
 				lines.add(String.format(
-					"Wall Object 2: %s bakedOri=%d ori=%d wallori=%d%s",
+					"Wall Object 2: %s bakedOri=%d ori=%d%s",
 					getIdAndImpostorId(wallObject, wallObject.getRenderable2()),
-					HDUtils.getModelPreOrientation(wallObject.getConfig()),
-					HDUtils.getModelOrientation(wallObject.getConfig()),
+					HDUtils.getBakedOrientation(wallObject.getConfig()),
 					wallObject.getOrientationB(),
 					getModelInfo(wallObject.getRenderable2())
 				));
@@ -659,11 +655,10 @@ public class TileInfoOverlay extends Overlay implements MouseListener, MouseWhee
 			}
 
 			lines.add(String.format(
-				"%s: %spreori=%d ori=%d objori=%d height=%d anim=%d faces=%d%s",
+				"%s: %spreori=%d ori=%d height=%d anim=%d faces=%d%s",
 				ModelHash.getTypeName(ModelHash.getType(gameObject.getHash())),
 				id,
-				HDUtils.getModelPreOrientation(gameObject.getConfig()),
-				HDUtils.getModelOrientation(gameObject.getConfig()),
+				HDUtils.getBakedOrientation(gameObject.getConfig()),
 				gameObject.getModelOrientation(),
 				height,
 				animationId,
