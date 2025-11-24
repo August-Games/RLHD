@@ -4579,7 +4579,7 @@
   },
   {
     "name": "CHASM_OF_FIRE",
-    "regions": [ 5789 ],
+    "regions": [ 5789, 6045 ],
     "hideOtherAreas": true
   },
   {
