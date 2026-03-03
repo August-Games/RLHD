@@ -62,8 +62,10 @@ public class ShaderProgram {
 
 		glValidateProgram(program);
 		if (glGetProgrami(program, GL_VALIDATE_STATUS) == GL_FALSE) {
+			// Validation can legitimately fail when compiled outside a full render cycle
+			// (e.g. at startup, before textures/samplers are bound), so log at debug level only.
 			String err = glGetProgramInfoLog(program);
-			log.error("Failed to validate shader program: {}", getClass().getSimpleName(), new ShaderException(err));
+			log.debug("Failed to validate shader program: {}", getClass().getSimpleName(), new ShaderException(err));
 		}
 	}
 

@@ -463,6 +463,7 @@ public class HdPlugin extends Plugin implements DrawCallbacks {
 
 	@Getter
 	private boolean isActive;
+	private boolean restartScheduled;
 	private boolean lwjglInitialized;
 	private boolean hasLoggedIn;
 	private boolean redrawPreviousFrame;
@@ -511,6 +512,11 @@ public class HdPlugin extends Plugin implements DrawCallbacks {
 
 		clientThread.invoke(() -> {
 			try {
+				// If a previous startUp already completed (e.g. from a rapid burst of restartPlugin() calls
+				// before the first could finish), skip this duplicate to avoid leaking GL resources.
+				if (isActive)
+					return true;
+
 				if (!textureManager.vanillaTexturesAvailable())
 					return false;
 
@@ -814,8 +820,13 @@ public class HdPlugin extends Plugin implements DrawCallbacks {
 	}
 
 	public void restartPlugin() {
+		// Guard against queuing multiple concurrent restarts, which would leak GPU resources
+		if (restartScheduled)
+			return;
+		restartScheduled = true;
 		// For some reason, it's necessary to delay this like below to prevent the canvas from locking up on Linux
 		SwingUtilities.invokeLater(() -> clientThread.invokeLater(() -> {
+			restartScheduled = false;
 			shutDown();
 			clientThread.invokeLater(this::startUp);
 		}));

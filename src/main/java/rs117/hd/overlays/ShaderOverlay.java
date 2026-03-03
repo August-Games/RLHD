@@ -123,6 +123,8 @@ public class ShaderOverlay<T extends ShaderOverlay.Shader> extends Overlay {
 	}
 
 	public void initialize() {
+		if (initialized)
+			return;
 		try {
 			shader.compile(plugin.getShaderIncludes());
 		} catch (Exception ex) {
