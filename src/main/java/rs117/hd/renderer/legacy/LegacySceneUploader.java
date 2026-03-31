@@ -491,7 +491,7 @@ public class LegacySceneUploader {
 					tile,
 					ModelHash.packUuid(ModelHash.TYPE_GROUND_OBJECT, groundObject.getId()),
 					(Model) renderable,
-					HDUtils.getBakedOrientation(groundObject.getConfig())
+					HDUtils.getModelPreOrientation(groundObject.getConfig())
 				);
 			}
 		}
@@ -499,7 +499,7 @@ public class LegacySceneUploader {
 		DecorativeObject decorativeObject = tile.getDecorativeObject();
 		if (decorativeObject != null) {
 			Renderable renderable = decorativeObject.getRenderable();
-			int orientation = HDUtils.getBakedOrientation(decorativeObject.getConfig());
+			int orientation = HDUtils.getModelPreOrientation(decorativeObject.getConfig());
 			if (renderable instanceof Model) {
 				uploadModel(
 					sceneContext,
@@ -533,7 +533,7 @@ public class LegacySceneUploader {
 					tile,
 					ModelHash.packUuid(ModelHash.TYPE_GAME_OBJECT, gameObject.getId()),
 					(Model) gameObject.getRenderable(),
-					HDUtils.getBakedOrientation(gameObject.getConfig())
+					HDUtils.getModelPreOrientation(gameObject.getConfig())
 				);
 			}
 		}

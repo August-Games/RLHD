@@ -506,13 +506,13 @@ public class LightManager {
 			if (light.def.type == LightType.FLICKER) {
 				float t = TWO_PI * (mod(plugin.elapsedTime, 60) / 60 + light.randomOffset);
 				float flicker = (
-					pow(cos(11 * t), 3) +
-					pow(cos(17 * t), 6) +
-					pow(cos(23 * t), 2) +
-					pow(cos(31 * t), 6) +
-					pow(cos(71 * t), 4) +
-					pow(cos(151 * t), 6) / 2
-				) / 4.335f;
+									pow(cos(11 * t), 3) +
+									pow(cos(17 * t), 6) +
+									pow(cos(23 * t), 2) +
+									pow(cos(31 * t), 6) +
+									pow(cos(71 * t), 4) +
+									pow(cos(151 * t), 6) / 2
+								) / 4.335f;
 
 				float maxFlicker = 1f + (light.def.range / 100f);
 				float minFlicker = 1f - (light.def.range / 100f);
@@ -852,21 +852,19 @@ public class LightManager {
 		if (tileObject instanceof GroundObject) {
 			var object = (GroundObject) tileObject;
 			imposterRenderables[0] = object.getRenderable();
-			orientations[0] = HDUtils.getBakedOrientation(object.getConfig());
+			orientations[0] = HDUtils.getModelOrientation(object.getConfig());
 		} else if (tileObject instanceof DecorativeObject) {
 			var object = (DecorativeObject) tileObject;
 			imposterRenderables[0] = object.getRenderable();
 			imposterRenderables[1] = object.getRenderable2();
-			int ori = HDUtils.getBakedOrientation(object.getConfig());
-			orientations[0] = orientations[1] = ori;
+			int ori = orientations[0] = orientations[1] = HDUtils.getModelOrientation(object.getConfig());
 			switch (ObjectType.fromConfig(object.getConfig())) {
 				case WallDecorDiagonalNoOffset:
 				case WallDecorDiagonalOffset:
 				case WallDecorDiagonalBoth:
-					int sin = SINE[ori];
-					int cos = COSINE[ori];
-					offset[0] = sin * 64 >> 16;
-					offset[1] = cos * 64 >> 16;
+					ori = (ori + 512) % 2048;
+					offset[0] = SINE[ori] * 64 >> 16;
+					offset[1] = COSINE[ori] * 64 >> 16;
 					break;
 			}
 			offset[0] += object.getXOffset();
@@ -882,7 +880,19 @@ public class LightManager {
 			sizeX = object.sizeX();
 			sizeY = object.sizeY();
 			imposterRenderables[0] = object.getRenderable();
-			orientations[0] = HDUtils.getBakedOrientation(object.getConfig());
+			int ori = orientations[0] = HDUtils.getModelOrientation(object.getConfig());
+			int offsetDist = 64;
+			switch (ObjectType.fromConfig(object.getConfig())) {
+				case RoofEdgeDiagonalCorner:
+				case RoofDiagonalWithRoofEdge:
+					ori += 1024;
+					offsetDist = round(offsetDist / sqrt(2));
+				case WallDiagonal:
+					ori = (ori + 2048 - 256) % 2048;
+					offset[0] = SINE[ori] * offsetDist >> 16;
+					offset[1] = COSINE[ori] * offsetDist >> 16;
+					break;
+			}
 		} else {
 			log.warn("Unhandled TileObject type: id: {}, hash: {}", tileObject.getId(), tileObject.getHash());
 			return;

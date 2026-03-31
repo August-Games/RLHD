@@ -148,14 +148,26 @@ public final class HDUtils {
 		var objectType = ObjectType.fromConfig(config);
 		int orientation = 1024 + 512 * (config >>> 6 & 3);
 		switch (objectType) {
-			case WallDecorDiagonalNoOffset:
-				orientation += 1024;
 			case WallDiagonalCorner:
 			case WallSquareCorner:
 			case WallDecorDiagonalOffset:
 			case WallDecorDiagonalBoth:
-				orientation -= 256;
-				break;
+				orientation += 1024;
+		}
+		return orientation % 2048;
+	}
+
+	/**
+	 * Computes the complete model orientation, including the pre-orientation when uploading,
+	 * and the extra 45-degree rotation of diagonal models.
+	 */
+	public static int getModelOrientation(int config) {
+		int orientation = getModelPreOrientation(config);
+		var objectType = ObjectType.fromConfig(config);
+		switch (objectType) {
+			case WallDecorDiagonalNoOffset:
+			case CentrepieceDiagonal:
+				orientation += 256;
 		}
 		return orientation % 2048;
 	}
