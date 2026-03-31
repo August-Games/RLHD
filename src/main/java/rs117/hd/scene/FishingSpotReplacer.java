@@ -13,7 +13,6 @@ import net.runelite.api.events.*;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
 import rs117.hd.HdPluginConfig;
-import rs117.hd.config.FishingSpotStyle;
 import rs117.hd.overlays.FrameTimer;
 import rs117.hd.overlays.Timer;
 import rs117.hd.scene.model_overrides.ModelOverride;
@@ -68,9 +67,6 @@ public class FishingSpotReplacer {
 	}
 
 	public ModelOverride getModelOverride() {
-		if (config.fishingSpotStyle() != FishingSpotStyle.HD)
-			return null;
-
 		ModelOverride override = new ModelOverride();
 		override.hide = true;
 		override.npcIds = NPC_IDS;
@@ -78,7 +74,8 @@ public class FishingSpotReplacer {
 	}
 
 	public void update() {
-		if (config.fishingSpotStyle() == FishingSpotStyle.VANILLA)
+		var sceneContext = plugin.getSceneContext();
+		if (sceneContext == null)
 			return;
 
 		frameTimer.begin(Timer.REPLACE_FISHING_SPOTS);
@@ -113,29 +110,24 @@ public class FishingSpotReplacer {
 		if (!NPC_IDS.contains(npc.getId()))
 			return;
 
-		var worldView = client.getTopLevelWorldView();
-		Scene scene = worldView.getScene();
-		int plane = worldView.getPlane();
-		Tile[][][] tiles = worldView.getScene().getTiles();
-
-		npcIndexToModel.computeIfAbsent(npc.getIndex(), i -> {
-			AnimationController animController;
-			int modelId;
-			int recolor = -1;
-
-			if (LAVA_FISHING_SPOT_IDS.contains(npc.getId())) {
-				animController = new AnimationController(client, LAVA_SPOT_ANIMATION_ID);
-				modelId = LAVA_SPOT_MODEL_ID;
-				recolor = LAVA_SPOT_COLOR;
-			} else {
-				animController = new AnimationController(client, FISHING_SPOT_ANIMATION_ID);
-				modelId = FISHING_SPOT_MODEL_ID;
-				var lp = npc.getLocalLocation();
-				if (lp.isInScene()) {
-					Tile tile = tiles[plane][lp.getSceneX()][lp.getSceneY()];
-					recolor = tileOverrideManager.getOverride(scene, tile).waterType.fishingSpotRecolor;
-				}
+		AnimationController animController;
+		int modelId;
+		int recolor = -1;
+		if (LAVA_FISHING_SPOT_IDS.contains(npc.getId())) {
+			animController = new AnimationController(client, LAVA_SPOT_ANIMATION_ID);
+			modelId = LAVA_SPOT_MODEL_ID;
+			recolor = LAVA_SPOT_COLOR;
+		} else {
+			animController = new AnimationController(client, FISHING_SPOT_ANIMATION_ID);
+			modelId = FISHING_SPOT_MODEL_ID;
+			var lp = npc.getLocalLocation();
+			if (lp.isInScene()) {
+				var worldView = client.getTopLevelWorldView();
+				int plane = worldView.getPlane();
+				Tile tile = worldView.getScene().getTiles()[plane][lp.getSceneX()][lp.getSceneY()];
+				recolor = tileOverrideManager.getOverride(sceneContext, tile).waterType.fishingSpotRecolor;
 			}
+		}
 
 			ModelData modelData = client.loadModelData(modelId);
 			if (modelData == null)
@@ -152,7 +144,7 @@ public class FishingSpotReplacer {
 
 			RuneLiteObject fishingSpot = client.createRuneLiteObject();
 			fishingSpot.setAnimationController(animController);
-			fishingSpot.setOrientation(random.nextInt(5) * 512);
+			fishingSpot.setOrientation(random.nextInt(4) * 512);
 			fishingSpot.setDrawFrontTilesFirst(false);
 			fishingSpot.setActive(true);
 			fishingSpot.setModel(modelData.light());

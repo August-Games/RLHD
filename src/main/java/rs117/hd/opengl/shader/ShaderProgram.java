@@ -8,11 +8,14 @@ import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import rs117.hd.opengl.uniforms.UniformBuffer;
+import rs117.hd.utils.Destructible;
+import rs117.hd.utils.DestructibleHandler;
 
 import static org.lwjgl.opengl.GL33C.*;
+import static rs117.hd.HdPlugin.APPLE;
 
 @Slf4j
-public class ShaderProgram {
+public class ShaderProgram implements Destructible {
 	@RequiredArgsConstructor
 	private static class UniformBufferBlockPair {
 		public final UniformBuffer<?> buffer;
@@ -48,8 +51,11 @@ public class ShaderProgram {
 		program = newProgram;
 		assert isValid();
 
-		for (var prop : uniformProperties)
+		for (var prop : uniformProperties) {
 			prop.uniformIndex = glGetUniformLocation(program, prop.uniformName);
+			if (prop.uniformIndex == -1 && !prop.ignoreMissing)
+				log.warn("{} has missing or unused {}: {}", getClass().getSimpleName(), prop.getClass().getSimpleName(), prop.uniformName);
+		}
 
 		for (var ubo : includes.uniformBuffers) {
 			int bindingIndex = glGetUniformBlockIndex(program, ubo.getUniformBlockName());
@@ -60,12 +66,13 @@ public class ShaderProgram {
 		use();
 		initialize();
 
-		glValidateProgram(program);
-		if (glGetProgrami(program, GL_VALIDATE_STATUS) == GL_FALSE) {
-			// Validation can legitimately fail when compiled outside a full render cycle
-			// (e.g. at startup, before textures/samplers are bound), so log at debug level only.
-			String err = glGetProgramInfoLog(program);
-			log.debug("Failed to validate shader program: {}", getClass().getSimpleName(), new ShaderException(err));
+		// Shader validation can be horribly slow on macOS with AMD GPUs
+		if (!APPLE || log.isDebugEnabled()) {
+			glValidateProgram(program);
+			if (glGetProgrami(program, GL_VALIDATE_STATUS) == GL_FALSE) {
+				String err = glGetProgramInfoLog(program);
+				log.error("Failed to validate shader program: {}", getClass().getSimpleName(), new ShaderException(err));
+			}
 		}
 	}
 
@@ -96,7 +103,16 @@ public class ShaderProgram {
 			glUniformBlockBinding(program, pair.uboProgramIndex, pair.buffer.getBindingIndex());
 	}
 
+	@Override
+	@SuppressWarnings("deprecation")
+	protected void finalize() {
+		if (program != 0)
+			DestructibleHandler.queueLeakedDestruction(this);
+	}
+
+	@Override
 	public void destroy() {
+		viable = true;
 		if (program == 0)
 			return;
 
@@ -107,13 +123,13 @@ public class ShaderProgram {
 			prop.destroy();
 
 		uniformBlockMappings.clear();
-		viable = true;
 	}
 
 	private static class UniformProperty {
 		ShaderProgram program;
 		String uniformName;
 		int uniformIndex;
+		boolean ignoreMissing;
 
 		void destroy() {
 			uniformIndex = -1;
@@ -142,7 +158,8 @@ public class ShaderProgram {
 		public void set(int textureUnit) {
 			assert textureUnit >= GL_TEXTURE0 : "Did you accidentally pass in an image unit?";
 			assert program.isActive();
-			glUniform1i(uniformIndex, textureUnit - GL_TEXTURE0);
+			if (uniformIndex != -1)
+				glUniform1i(uniformIndex, textureUnit - GL_TEXTURE0);
 		}
 	}
 
@@ -278,5 +295,16 @@ public class ShaderProgram {
 
 	public Uniform4f addUniform4f(String uniformName) {
 		return addUniform(new Uniform4f(), uniformName);
+	}
+
+	public static class UniformMat4 extends UniformProperty {
+		public void set(float[] mat4) {
+			assert program.isActive();
+			glUniformMatrix4fv(uniformIndex, false, mat4);
+		}
+	}
+
+	public UniformMat4 addUniformMat4(String uniformName) {
+		return addUniform(new UniformMat4(), uniformName);
 	}
 }

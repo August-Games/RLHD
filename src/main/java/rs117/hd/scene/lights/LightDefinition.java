@@ -27,13 +27,15 @@ public class LightDefinition {
 	public int spawnDelay;
 	public int despawnDelay;
 	public boolean fixedDespawnTime;
+	public boolean despawnWithParent;
 	public boolean visibleFromOtherPlanes;
 	public boolean ignoreActorHiding;
 	public int renderableIndex = -1;
+	public boolean waitForAnimation;
 
-	@JsonAdapter(AABB.Adapter.class)
+	@JsonAdapter(AABB.ArrayAdapter.class)
 	public AABB[] areas = {};
-	@JsonAdapter(AABB.Adapter.class)
+	@JsonAdapter(AABB.ArrayAdapter.class)
 	public AABB[] excludeAreas = {};
 	@JsonAdapter(GamevalManager.NpcAdapter.class)
 	public HashSet<Integer> npcIds = new HashSet<>();
