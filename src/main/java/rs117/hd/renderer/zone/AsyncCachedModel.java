@@ -332,8 +332,20 @@ public final class AsyncCachedModel extends Job implements Model {
 				orientation,
 				x, y, z
 			);
-		} catch (Exception e) {
-			log.error("Error drawing temp object", e);
+		} catch (Throwable e) {
+			ModelRenderDiagnostics.captureError(
+				"asyncModelUpload.exception",
+				"Error drawing async model",
+				ModelRenderDiagnostics.context("async-model-upload")
+					.worldView(ctx)
+					.tileObject(tileObject)
+					.renderable(renderable)
+					.model(this)
+					.modelOverride(modelOverride)
+					.position(orientation, x, y, z)
+					.scratchLimits(),
+				e
+			);
 		} finally {
 			INFLIGHT.remove(this);
 			if (alphaModel != null)

@@ -24,7 +24,15 @@ public final class EboAlphaWriterJob extends Job {
 					continue;
 
 				if (eboAlphaBuffer.remaining() < m.sortedFacesLen) {
-					log.warn("Not enough space in eboAlphaBuffer for alpha faces");
+					ModelRenderDiagnostics.captureWarning(
+						"staticAlphaEbo.overflow",
+						"Not enough space in eboAlphaBuffer for alpha faces",
+						ModelRenderDiagnostics.context("static-alpha-ebo-upload")
+							.alphaModel(m)
+							.scratchLimits()
+							.extra("eboAlphaRemaining", eboAlphaBuffer.remaining())
+							.extra("eboAlphaRequired", m.sortedFacesLen)
+					);
 					break;
 				}
 				eboAlphaBuffer.put(m.sortedFaces, 0, m.sortedFacesLen);

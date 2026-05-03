@@ -548,7 +548,7 @@ public class Zone implements Destructible {
 
 		int[] packedFaces = m.packedFaces = new int[(endpos - startpos) / ((3 * VERT_SIZE) >> 2)];
 		int radius = 0;
-		char bufferIdx = 0;
+		int bufferIdx = 0;
 		for (int f = 0; f < faceCount; ++f) {
 			if (color3[f] == -2)
 				continue;
@@ -598,6 +598,22 @@ public class Zone implements Destructible {
 
 			radius = Math.max(radius, fx * fx + fy * fy + fz * fz);
 
+			if (bufferIdx >= packedFaces.length) {
+				ModelRenderDiagnostics.captureWarning(
+					"staticAlphaModel.packedFaceCapacity",
+					"Skipping remaining static alpha faces because packed face scratch is full",
+					ModelRenderDiagnostics.context("static-alpha-model-build")
+						.model(model)
+						.alphaModel(m)
+						.modelOverride(modelOverride)
+						.position(0, x, y, z)
+						.scratchLimits()
+						.extra("packedFaceCapacity", packedFaces.length)
+						.extra("faceIndex", f)
+				);
+				break;
+			}
+
 			packedFaces[bufferIdx] = ((fx & ((1 << 11) - 1)) << 21)
 									 | ((fy & ((1 << 10) - 1)) << 11)
 									 | (fz & ((1 << 11) - 1));
@@ -607,9 +623,24 @@ public class Zone implements Destructible {
 		m.radius = 2 + (int) Math.sqrt(radius);
 		m.sortedFaces = new int[bufferIdx * 3];
 
+		if (bufferIdx == 0) {
+			ModelRenderDiagnostics.captureWarning(
+				"staticAlphaModel.empty",
+				"Skipping static alpha model with no sortable alpha faces",
+				ModelRenderDiagnostics.context("static-alpha-model-build")
+					.model(model)
+					.alphaModel(m)
+					.modelOverride(modelOverride)
+					.position(0, x, y, z)
+					.scratchLimits()
+					.extra("packedFaceCapacity", packedFaces.length)
+			);
+			return;
+		}
+
 		assert packedFaces.length > 0;
 		// Normally these will be equal, but transparency is used to hide faces in the TzHaar reskin
-		assert bufferIdx <= packedFaces.length : String.format("%d > %d", (int) bufferIdx, packedFaces.length);
+		assert bufferIdx <= packedFaces.length : String.format("%d > %d", bufferIdx, packedFaces.length);
 
 		alphaModels.add(m);
 	}

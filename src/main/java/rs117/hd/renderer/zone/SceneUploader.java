@@ -24,6 +24,7 @@
  */
 package rs117.hd.renderer.zone;
 
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 import javax.inject.Inject;
@@ -134,16 +135,16 @@ public class SceneUploader implements AutoCloseable {
 	private final float[] modelUvs = new float[12];
 	private final int[] modelNormals = new int[9];
 
-	public final float[] modelProjected = new float[MAX_VERTEX_COUNT * 3];
+	private float[] modelProjected = new float[MAX_VERTEX_COUNT * 3];
 	public int tempModelAlphaFaces = 0;
 
-	private final float[] modelLocal = new float[MAX_VERTEX_COUNT * 3];
-	private final int[] modelLocalI = new int[MAX_VERTEX_COUNT * 3];
-	private final boolean[] visibility = new boolean[MAX_VERTEX_COUNT];
+	private float[] modelLocal = new float[MAX_VERTEX_COUNT * 3];
+	private int[] modelLocalI = new int[MAX_VERTEX_COUNT * 3];
+	private boolean[] visibility = new boolean[MAX_VERTEX_COUNT];
 
-	private final ModelOverride[] faceOverrides = new ModelOverride[MAX_FACE_COUNT];
-	private final Material[] faceMaterials = new Material[MAX_FACE_COUNT];
-	private final UvType[] faceUVTypes = new UvType[MAX_FACE_COUNT];
+	private ModelOverride[] faceOverrides = new ModelOverride[MAX_FACE_COUNT];
+	private Material[] faceMaterials = new Material[MAX_FACE_COUNT];
+	private UvType[] faceUVTypes = new UvType[MAX_FACE_COUNT];
 
 	private final float[] projected = new float[4];
 
@@ -172,6 +173,29 @@ public class SceneUploader implements AutoCloseable {
 		tileHeights = null;
 		currentScene = null;
 		onBeforeProcessTile = null;
+	}
+
+	private boolean ensureModelCapacity(int vertexCount, int faceCount) {
+		if (vertexCount < 0 || faceCount < 0 || vertexCount > Integer.MAX_VALUE / 3)
+			return false;
+
+		final int vertexDataCount = vertexCount * 3;
+		if (modelProjected.length < vertexDataCount)
+			modelProjected = Arrays.copyOf(modelProjected, vertexDataCount);
+		if (modelLocal.length < vertexDataCount)
+			modelLocal = Arrays.copyOf(modelLocal, vertexDataCount);
+		if (modelLocalI.length < vertexDataCount)
+			modelLocalI = Arrays.copyOf(modelLocalI, vertexDataCount);
+		if (visibility.length < vertexCount)
+			visibility = Arrays.copyOf(visibility, vertexCount);
+
+		if (faceOverrides.length < faceCount)
+			faceOverrides = Arrays.copyOf(faceOverrides, faceCount);
+		if (faceMaterials.length < faceCount)
+			faceMaterials = Arrays.copyOf(faceMaterials, faceCount);
+		if (faceUVTypes.length < faceCount)
+			faceUVTypes = Arrays.copyOf(faceUVTypes, faceCount);
+		return true;
 	}
 
 	public void estimateZoneSize(ZoneSceneContext ctx, Zone zone, int mzx, int mzz) throws InterruptedException {
@@ -734,7 +758,9 @@ public class SceneUploader implements AutoCloseable {
 		if (modelOverride.hide)
 			return;
 
+		int opaqueStart = opaqueBuffer != null ? opaqueBuffer.position() : 0;
 		int alphaStart = alphaBuffer != null ? alphaBuffer.position() : 0;
+		int textureStart = textureBuffer != null ? textureBuffer.position() : 0;
 		try {
 			uploadStaticModel(
 				ctx, tile, model, modelOverride, uuid,
@@ -745,18 +771,36 @@ public class SceneUploader implements AutoCloseable {
 				textureBuffer
 			);
 		} catch (Throwable ex) {
-			log.warn(
-				"Error uploading {} {} {} {} (ID {}), override=\"{}\", opaque={}, alpha={}",
-				r instanceof DynamicObject ? "dynamic" : "static",
-				ModelHash.getTypeName(ModelHash.getUuidType(uuid)),
-				ModelHash.getUuidSubType(uuid),
-				gamevalManager.getObjectName(id),
-				id,
-				modelOverride.description,
-				opaqueBuffer,
-				alphaBuffer,
+			if (opaqueBuffer != null)
+				opaqueBuffer.getBuffer().position(opaqueStart);
+			if (alphaBuffer != null)
+				alphaBuffer.getBuffer().position(alphaStart);
+			if (textureBuffer != null)
+				textureBuffer.getBuffer().position(textureStart);
+
+			ModelRenderDiagnostics.captureError(
+				"staticModelUpload.exception",
+				"Error uploading static model",
+				staticModelContext(
+					"static-model-upload",
+					ctx,
+					tile,
+					model,
+					modelOverride,
+					uuid,
+					r instanceof DynamicObject ? "dynamic" : "static",
+					id,
+					orient,
+					x,
+					y,
+					z
+				)
+					.extra("objectName", gamevalManager.getObjectName(id))
+					.extra("opaqueBuffer", opaqueBuffer)
+					.extra("alphaBuffer", alphaBuffer),
 				ex
 			);
+			return;
 		}
 
 		int alphaEnd = alphaBuffer != null ? alphaBuffer.position() : 0;
@@ -783,20 +827,59 @@ public class SceneUploader implements AutoCloseable {
 					rid, level, id
 				);
 			} catch (Throwable ex) {
-				log.warn(
-					"Error adding alpha model for {} {} {} {} (ID {}), override=\"{}\", opaque={}, alpha={}",
-					r instanceof DynamicObject ? "dynamic" : "static",
-					ModelHash.getTypeName(ModelHash.getUuidType(uuid)),
-					ModelHash.getUuidSubType(uuid),
-					gamevalManager.getObjectName(id),
-					id,
-					modelOverride.description,
-					opaqueBuffer,
-					alphaBuffer,
+				ModelRenderDiagnostics.captureError(
+					"staticAlphaModel.exception",
+					"Error adding static alpha model",
+					staticModelContext(
+						"static-alpha-model-add",
+						ctx,
+						tile,
+						model,
+						modelOverride,
+						uuid,
+						r instanceof DynamicObject ? "dynamic" : "static",
+						id,
+						orient,
+						x,
+						y,
+						z
+					)
+						.extra("objectName", gamevalManager.getObjectName(id))
+						.extra("opaqueBuffer", opaqueBuffer)
+						.extra("alphaBuffer", alphaBuffer)
+						.extra("alphaStart", alphaStart)
+						.extra("alphaEnd", alphaEnd),
 					ex
 				);
 			}
 		}
+	}
+
+	private ModelRenderDiagnostics.Context staticModelContext(
+		String renderPath,
+		ZoneSceneContext ctx,
+		Tile tile,
+		Model model,
+		ModelOverride modelOverride,
+		int uuid,
+		String sourceType,
+		int id,
+		int orientation,
+		int x,
+		int y,
+		int z
+	) {
+		return ModelRenderDiagnostics.context(renderPath)
+			.scene(ctx.scene)
+			.tile(tile)
+			.model(model)
+			.modelOverride(modelOverride)
+			.uuid(uuid)
+			.position(orientation, x, y, z)
+			.scratchLimits()
+			.extra("sceneOffset", ctx.sceneOffset)
+			.extra("sourceType", sourceType)
+			.extra("objectId", id);
 	}
 
 	@SuppressWarnings({ "UnnecessaryLocalVariable" })
@@ -1361,6 +1444,21 @@ public class SceneUploader implements AutoCloseable {
 		final int[][][] tileHeights = ctx.scene.getTileHeights();
 		final int faceCount = model.getFaceCount();
 		final int vertexCount = model.getVerticesCount();
+		if (!ensureModelCapacity(vertexCount, faceCount)) {
+			ModelRenderDiagnostics.captureWarning(
+				"staticModelUpload.invalidScratchSize",
+				"Skipping static model with invalid scratch size",
+				staticModelContext("static-model-upload", ctx, tile, model, modelOverride, uuid, "static", -1, orientation, x, y, z)
+			);
+			return 0;
+		}
+		if (vertexCount > MAX_VERTEX_COUNT || faceCount > MAX_FACE_COUNT) {
+			ModelRenderDiagnostics.captureWarning(
+				"staticModelUpload.scratchGrow",
+				"Growing static model upload scratch buffers for oversized model",
+				staticModelContext("static-model-upload", ctx, tile, model, modelOverride, uuid, "static", -1, orientation, x, y, z)
+			);
+		}
 
 		final float[] vertexX = model.getVerticesX();
 		final float[] vertexY = model.getVerticesY();
@@ -1714,6 +1812,30 @@ public class SceneUploader implements AutoCloseable {
 		int x, int y, int z
 	) {
 		final int vertexCount = model.getVerticesCount();
+		final int triangleCount = model.getFaceCount();
+		if (!ensureModelCapacity(vertexCount, triangleCount)) {
+			ModelRenderDiagnostics.captureWarning(
+				"tempModelUpload.invalidScratchSize",
+				"Skipping temp model with invalid scratch size",
+				ModelRenderDiagnostics.context("temp-model-preprocess")
+					.model(model)
+					.modelOverride(modelOverride)
+					.position(orientation, x, y, z)
+					.scratchLimits()
+			);
+			return false;
+		}
+		if (vertexCount > MAX_VERTEX_COUNT || triangleCount > MAX_FACE_COUNT) {
+			ModelRenderDiagnostics.captureWarning(
+				"tempModelUpload.scratchGrow",
+				"Growing temp model upload scratch buffers for oversized model",
+				ModelRenderDiagnostics.context("temp-model-preprocess")
+					.model(model)
+					.modelOverride(modelOverride)
+					.position(orientation, x, y, z)
+					.scratchLimits()
+			);
+		}
 
 		final float[] verticesX = model.getVerticesX();
 		final float[] verticesY = model.getVerticesY();
@@ -1789,9 +1911,12 @@ public class SceneUploader implements AutoCloseable {
 		visibleFaces.reset();
 		culledFaces.reset();
 
-		final int triangleCount = model.getFaceCount();
 		visibleFaces.ensureCapacity(triangleCount);
 		culledFaces.ensureCapacity(triangleCount);
+		if (faceDistances != null && faceDistances.length < triangleCount) {
+			faceDistances = null;
+			shouldSort = false;
+		}
 
 		final int[] color3s = model.getFaceColors3();
 		final int[] indices1 = model.getFaceIndices1();

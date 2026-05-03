@@ -38,26 +38,51 @@ public final class FacePrioritySorter implements AutoCloseable {
 	public static ConcurrentPool<FacePrioritySorter> POOL;
 
 	public static final int MAX_FACE_COUNT = 8192;
-	private static final int MAX_DIAMETER = 6000;
-	private static final int MAX_FACES_PER_PRIORITY = 4000;
+	static final int MAX_DIAMETER = 6000;
+	static final int MAX_FACES_PER_PRIORITY = 4000;
 	private static final int PRIORITY_COUNT = 12;
 
-	public final int[] faceDistances = new int[MAX_FACE_COUNT];
+	public int[] faceDistances = new int[MAX_FACE_COUNT];
 
-	private final int[] orderedFaces = new int[PRIORITY_COUNT * MAX_FACES_PER_PRIORITY];
+	private int priorityFaceCapacity = MAX_FACES_PER_PRIORITY;
+	private int[] orderedFaces = new int[PRIORITY_COUNT * MAX_FACES_PER_PRIORITY];
 	private final int[] numOfPriority = new int[PRIORITY_COUNT];
-	private final int[] eq10 = new int[MAX_FACES_PER_PRIORITY];
-	private final int[] eq11 = new int[MAX_FACES_PER_PRIORITY];
+	private int[] eq10 = new int[MAX_FACES_PER_PRIORITY];
+	private int[] eq11 = new int[MAX_FACES_PER_PRIORITY];
 	private final int[] lt10 = new int[PRIORITY_COUNT];
 
 	private final int[] zsortHead = new int[MAX_DIAMETER];
 	private final int[] zsortTail = new int[MAX_DIAMETER];
-	private final int[] zsortNext = new int[MAX_FACE_COUNT];
+	private int[] zsortNext = new int[MAX_FACE_COUNT];
+
+	void ensureCapacity(int faceCount) {
+		if (faceDistances.length < faceCount)
+			faceDistances = Arrays.copyOf(faceDistances, faceCount);
+		if (zsortNext.length < faceCount)
+			zsortNext = Arrays.copyOf(zsortNext, faceCount);
+		if (priorityFaceCapacity < faceCount) {
+			priorityFaceCapacity = faceCount;
+			orderedFaces = new int[PRIORITY_COUNT * priorityFaceCapacity];
+			eq10 = new int[priorityFaceCapacity];
+			eq11 = new int[priorityFaceCapacity];
+		}
+	}
 
 	void sortModelFaces(PrimitiveIntArray visibleFaces, Model model) {
+		ensureCapacity(model.getFaceCount());
+
 		final int diameter = model.getDiameter();
-		if (diameter <= 0 || diameter >= MAX_DIAMETER)
+		if (diameter <= 0 || diameter >= MAX_DIAMETER) {
+			ModelRenderDiagnostics.captureWarning(
+				"modelFaceSort.invalidDiameter",
+				"Skipping model face sort due to invalid diameter",
+				ModelRenderDiagnostics.context("model-face-sort")
+					.model(model)
+					.scratchLimits()
+					.extra("sortDiameter", diameter)
+			);
 			return;
+		}
 
 		int unsortedCount = 0;
 		int minFz = diameter, maxFz = 0;
@@ -111,12 +136,24 @@ public final class FacePrioritySorter implements AutoCloseable {
 		Arrays.fill(numOfPriority, 0);
 		Arrays.fill(lt10, 0);
 
+		int invalidPriorityCount = 0;
+		int firstInvalidPriority = 0;
+		int firstInvalidPriorityFace = -1;
 		for (int i = maxFz; i >= minFz; --i) {
 			for (int f = zsortHead[i]; f != -1; f = zsortNext[f]) {
 				final int pri = priorities[f];
+				if (pri < 0 || pri >= PRIORITY_COUNT) {
+					if (invalidPriorityCount++ == 0) {
+						firstInvalidPriority = pri;
+						firstInvalidPriorityFace = f;
+					}
+					visibleFaces.put(f);
+					continue;
+				}
+
 				final int idx = numOfPriority[pri]++;
 
-				orderedFaces[pri * MAX_FACES_PER_PRIORITY + idx] = f;
+				orderedFaces[pri * priorityFaceCapacity + idx] = f;
 
 				if (pri < 10)
 					lt10[pri] += i;
@@ -125,6 +162,18 @@ public final class FacePrioritySorter implements AutoCloseable {
 				else
 					eq11[idx] = i;
 			}
+		}
+		if (invalidPriorityCount > 0) {
+			ModelRenderDiagnostics.captureWarning(
+				"modelFaceSort.invalidPriority",
+				"Skipping invalid model face priorities",
+				ModelRenderDiagnostics.context("model-face-priority-sort")
+					.model(model)
+					.scratchLimits()
+					.extra("invalidPriorityCount", invalidPriorityCount)
+					.extra("firstInvalidPriority", firstInvalidPriority)
+					.extra("firstInvalidPriorityFace", firstInvalidPriorityFace)
+			);
 		}
 
 		int avg12 = (numOfPriority[1] + numOfPriority[2]) > 0 ?
@@ -138,12 +187,12 @@ public final class FacePrioritySorter implements AutoCloseable {
 
 		int drawnFaces = 0;
 		int numDynFaces = numOfPriority[10];
-		int dynBase = 10 * MAX_FACES_PER_PRIORITY;
+		int dynBase = 10 * priorityFaceCapacity;
 		int[] dynDist = eq10;
 
 		if (numDynFaces == 0) {
 			numDynFaces = numOfPriority[11];
-			dynBase = 11 * MAX_FACES_PER_PRIORITY;
+			dynBase = 11 * priorityFaceCapacity;
 			dynDist = eq11;
 		}
 
@@ -157,10 +206,10 @@ public final class FacePrioritySorter implements AutoCloseable {
 			) {
 				visibleFaces.put(orderedFaces[dynBase + drawnFaces++]);
 
-				if (drawnFaces == numDynFaces && dynBase == 10 * MAX_FACES_PER_PRIORITY) {
+				if (drawnFaces == numDynFaces && dynBase == 10 * priorityFaceCapacity) {
 					drawnFaces = 0;
 					numDynFaces = numOfPriority[11];
-					dynBase = 11 * MAX_FACES_PER_PRIORITY;
+					dynBase = 11 * priorityFaceCapacity;
 					dynDist = eq11;
 				}
 
@@ -169,7 +218,7 @@ public final class FacePrioritySorter implements AutoCloseable {
 
 			visibleFaces.put(
 				orderedFaces,
-				pri * MAX_FACES_PER_PRIORITY,
+				pri * priorityFaceCapacity,
 				numOfPriority[pri]
 			);
 		}
@@ -177,10 +226,10 @@ public final class FacePrioritySorter implements AutoCloseable {
 		while (currFaceDistance != -1000) {
 			visibleFaces.put(orderedFaces[dynBase + drawnFaces++]);
 
-			if (drawnFaces == numDynFaces && dynBase == 10 * MAX_FACES_PER_PRIORITY) {
+			if (drawnFaces == numDynFaces && dynBase == 10 * priorityFaceCapacity) {
 				drawnFaces = 0;
 				numDynFaces = numOfPriority[11];
-				dynBase = 11 * MAX_FACES_PER_PRIORITY;
+				dynBase = 11 * priorityFaceCapacity;
 				dynDist = eq11;
 			}
 
@@ -195,15 +244,28 @@ public final class FacePrioritySorter implements AutoCloseable {
 	) {
 		final int radius = m.radius;
 		final int diameter = 1 + radius * 2;
-		if (diameter >= MAX_DIAMETER)
+		if (diameter <= 0 || diameter >= MAX_DIAMETER) {
+			ModelRenderDiagnostics.captureWarning(
+				"staticAlphaSort.invalidDiameter",
+				"Skipping static alpha model sort due to invalid diameter",
+				ModelRenderDiagnostics.context("static-alpha-sort")
+					.alphaModel(m)
+					.scratchLimits()
+					.extra("sortDiameter", diameter)
+			);
 			return;
+		}
 
 		final int faceCount = m.packedFaces.length;
+		ensureCapacity(faceCount);
 
 		Arrays.fill(zsortHead, 0, diameter, -1);
 		Arrays.fill(zsortTail, 0, diameter, -1);
 
 		int minFz = diameter, maxFz = 0;
+		int invalidDistanceCount = 0;
+		int firstInvalidDistance = 0;
+		int firstInvalidDistanceFace = -1;
 		for (int i = 0; i < faceCount; ++i) {
 			final int packed = m.packedFaces[i];
 			final int x = packed >> 21;
@@ -212,6 +274,13 @@ public final class FacePrioritySorter implements AutoCloseable {
 
 			int fz = ((z * yawCos - x * yawSin) >> 16);
 			fz = ((y * pitchSin + fz * pitchCos) >> 16) + radius;
+			if (fz < 0 || fz >= diameter) {
+				if (invalidDistanceCount++ == 0) {
+					firstInvalidDistance = fz;
+					firstInvalidDistanceFace = i;
+				}
+				continue;
+			}
 
 			if (zsortTail[fz] == -1) {
 				zsortHead[fz] = zsortTail[fz] = i;
@@ -226,12 +295,35 @@ public final class FacePrioritySorter implements AutoCloseable {
 				zsortTail[fz] = i;
 			}
 		}
+		if (invalidDistanceCount > 0) {
+			ModelRenderDiagnostics.captureWarning(
+				"staticAlphaSort.invalidDistance",
+				"Skipping static alpha faces with invalid sort distance",
+				ModelRenderDiagnostics.context("static-alpha-sort")
+					.alphaModel(m)
+					.scratchLimits()
+					.extra("invalidDistanceCount", invalidDistanceCount)
+					.extra("firstInvalidDistance", firstInvalidDistance)
+					.extra("firstInvalidDistanceFace", firstInvalidDistanceFace)
+					.extra("sortDiameter", diameter)
+			);
+		}
 
 		final int start = m.startpos / (VERT_SIZE >> 2);
 		for (int i = maxFz; i >= minFz; --i) {
 			for (int f = zsortHead[i]; f != -1; f = zsortNext[f]) {
-				if (m.sortedFacesLen >= m.sortedFaces.length)
-					break;
+				if (m.sortedFacesLen + 3 > m.sortedFaces.length) {
+					ModelRenderDiagnostics.captureWarning(
+						"staticAlphaSort.sortedFaceCapacity",
+						"Skipping remaining static alpha faces because sorted face scratch is full",
+						ModelRenderDiagnostics.context("static-alpha-sort")
+							.alphaModel(m)
+							.scratchLimits()
+							.extra("sortedFacesLen", m.sortedFacesLen)
+							.extra("sortedFaceCapacity", m.sortedFaces.length)
+					);
+					return;
+				}
 
 				if (f >= faceCount)
 					continue;

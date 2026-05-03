@@ -303,6 +303,9 @@ public class ModelStreamingManager {
 			SceneUploader sceneUploader = SceneUploader.POOL.acquire();
 			FacePrioritySorter facePrioritySorter = shouldSort ? FacePrioritySorter.POOL.acquire() : null
 		) {
+			if (facePrioritySorter != null)
+				facePrioritySorter.ensureCapacity(m.getFaceCount());
+
 			shouldSort &= sceneUploader.preprocessTempModel(
 				worldProjection,
 				plugin.cameraFrustum,
@@ -369,8 +372,13 @@ public class ModelStreamingManager {
 				}
 				opaqueView.end();
 			}
-		} catch (Exception e) {
-			log.error("Error rendering temp object", e);
+		} catch (Throwable e) {
+			ModelRenderDiagnostics.captureError(
+				"tempModelUpload.exception",
+				"Error rendering temp object",
+				modelContext("temp-model-upload", ctx, gameObject, renderable, modelOverride, m, orientation, x, y, z),
+				e
+			);
 		} finally {
 			FACE_INDICES.recycle(visibleFaces);
 			FACE_INDICES.recycle(culledFaces);
@@ -567,6 +575,9 @@ public class ModelStreamingManager {
 			SceneUploader sceneUploader = SceneUploader.POOL.acquire();
 			FacePrioritySorter facePrioritySorter = shouldSort ? FacePrioritySorter.POOL.acquire() : null
 		) {
+			if (facePrioritySorter != null)
+				facePrioritySorter.ensureCapacity(m.getFaceCount());
+
 			shouldSort &= sceneUploader.preprocessTempModel(
 				projection,
 				plugin.cameraFrustum,
@@ -629,12 +640,39 @@ public class ModelStreamingManager {
 				}
 				opaqueView.end();
 			}
-		} catch (Exception e) {
-			log.error("Error rendering dynamic object", e);
+		} catch (Throwable e) {
+			ModelRenderDiagnostics.captureError(
+				"dynamicModelUpload.exception",
+				"Error rendering dynamic object",
+				modelContext("dynamic-model-upload", ctx, tileObject, renderable, modelOverride, m, orient, x, y, z),
+				e
+			);
 		} finally {
 			FACE_INDICES.recycle(visibleFaces);
 			FACE_INDICES.recycle(culledFaces);
 		}
+	}
+
+	private ModelRenderDiagnostics.Context modelContext(
+		String renderPath,
+		WorldViewContext ctx,
+		TileObject tileObject,
+		Renderable renderable,
+		ModelOverride modelOverride,
+		Model model,
+		int orientation,
+		int x,
+		int y,
+		int z
+	) {
+		return ModelRenderDiagnostics.context(renderPath)
+			.worldView(ctx)
+			.tileObject(tileObject)
+			.renderable(renderable)
+			.model(model)
+			.modelOverride(modelOverride)
+			.position(orientation, x, y, z)
+			.scratchLimits();
 	}
 
 	public void ensureAsyncUploadsComplete(@Nullable Zone zone) {

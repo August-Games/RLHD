@@ -71,8 +71,22 @@ public final class StaticAlphaSortingJob extends Job {
 
 	private void processModel(FacePrioritySorter sorter, AlphaModel m) {
 		m.sortedFacesLen = 0;
-		sorter.sortStaticModelFacesByDistance(m, yawCos, yawSin, pitchCos, pitchSin);
-		m.setSorted();
+		try {
+			sorter.sortStaticModelFacesByDistance(m, yawCos, yawSin, pitchCos, pitchSin);
+		} catch (Throwable ex) {
+			ModelRenderDiagnostics.captureError(
+				"staticAlphaSort.exception",
+				"Error sorting static alpha model",
+				ModelRenderDiagnostics.context("static-alpha-sort")
+					.alphaModel(m)
+					.scratchLimits()
+					.extra("cameraYaw", yaw)
+					.extra("cameraPitch", pitch),
+				ex
+			);
+		} finally {
+			m.setSorted();
+		}
 	}
 
 	public boolean forceProcessModelClient(AlphaModel m) {

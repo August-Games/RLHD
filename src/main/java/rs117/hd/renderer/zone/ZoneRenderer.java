@@ -1061,8 +1061,20 @@ public class ZoneRenderer implements Renderer {
 		final long start = System.nanoTime();
 		try {
 			modelStreamingManager.drawDynamic(renderThreadId, projection, scene, tileObject, r, m, orient, x, y, z);
-		} catch (Exception ex) {
-			log.error("Error in drawDynamic:", ex);
+		} catch (Throwable ex) {
+			ModelRenderDiagnostics.captureError(
+				"drawDynamic.exception",
+				"Error in drawDynamic",
+				ModelRenderDiagnostics.context("draw-dynamic")
+					.scene(scene)
+					.tileObject(tileObject)
+					.renderable(r)
+					.model(m)
+					.position(orient, x, y, z)
+					.scratchLimits()
+					.extra("renderThreadId", renderThreadId),
+				ex
+			);
 		} finally {
 			frameTimer.add(renderThreadId == -1 ? Timer.DRAW_DYNAMIC : Timer.DRAW_DYNAMIC_ASYNC, System.nanoTime() - start);
 		}
@@ -1076,8 +1088,19 @@ public class ZoneRenderer implements Renderer {
 		frameTimer.begin(Timer.DRAW_TEMP);
 		try {
 			modelStreamingManager.drawTemp(worldProjection, scene, gameObject, m, orientation, x, y, z);
-		} catch (Exception ex) {
-			log.error("Error in drawTemp:", ex);
+		} catch (Throwable ex) {
+			ModelRenderDiagnostics.captureError(
+				"drawTemp.exception",
+				"Error in drawTemp",
+				ModelRenderDiagnostics.context("draw-temp")
+					.scene(scene)
+					.tileObject(gameObject)
+					.renderable(gameObject != null ? gameObject.getRenderable() : null)
+					.model(m)
+					.position(orientation, x, y, z)
+					.scratchLimits(),
+				ex
+			);
 		} finally {
 			frameTimer.end(Timer.DRAW_TEMP);
 		}
