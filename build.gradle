@@ -18,7 +18,7 @@ def pluginMainClass = 'rs117.hd.HdPluginTest'
 
 dependencies {
 	compileOnly group: 'net.runelite', name: 'client', version: runeLiteVersion
-	compileOnly 'io.sentry:sentry:7.6.0'
+	implementation 'io.sentry:sentry:7.6.0'
 
 	compileOnly 'org.projectlombok:lombok:1.18.30'
 	annotationProcessor 'org.projectlombok:lombok:1.18.30'
