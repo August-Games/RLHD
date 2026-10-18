@@ -280,8 +280,8 @@ final class ModelRenderDiagnostics {
 				extra("faceCount", faceCount);
 				extra("packedFaceCount", model.packedFaces.length);
 			}
-			if (model.sortedFaces != null)
-				extra("sortedFaceCapacity", model.sortedFaces.length);
+			if (model.tempSortedFaces != null)
+				extra("sortedFaceCapacity", model.tempSortedFaces.length);
 			extra("sortedFacesLen", model.sortedFacesLen);
 			extra("positionX", model.x);
 			extra("positionY", model.y);

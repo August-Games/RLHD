@@ -18,7 +18,7 @@ import rs117.hd.opengl.uniforms.UBOWorldViews.WorldViewStruct;
 import rs117.hd.utils.Camera;
 import rs117.hd.utils.CommandBuffer;
 import rs117.hd.utils.DestructibleHandler;
-import rs117.hd.utils.RenderState;
+import rs117.hd.utils.Mat4;
 import rs117.hd.utils.buffer.GLBuffer;
 import rs117.hd.utils.collections.ConcurrentPool;
 import rs117.hd.utils.jobs.JobGroup;
@@ -27,6 +27,8 @@ import static org.lwjgl.opengl.GL33C.*;
 import static rs117.hd.renderer.zone.DynamicModelVAO.METADATA_SIZE;
 import static rs117.hd.renderer.zone.SceneManager.NUM_ZONES;
 import static rs117.hd.renderer.zone.ZoneRenderer.FRAMES_IN_FLIGHT;
+import static rs117.hd.utils.MathUtils.*;
+import static rs117.hd.utils.collections.Util.quickSort;
 
 @Slf4j
 public class WorldViewContext {
@@ -34,7 +36,8 @@ public class WorldViewContext {
 	public static final int VAO_ALPHA = 1;
 	public static final int VAO_PLAYER = 2;
 	public static final int VAO_SHADOW = 3;
-	public static final int VAO_COUNT = 4;
+	public static final int VAO_PRESCENE = 4;
+	public static final int VAO_COUNT = 5;
 
 	public static final ConcurrentPool<DynamicModelVAO> DYNAMIC_MODEL_VAO_STAGING_POOL =
 		new ConcurrentPool<>(() -> new DynamicModelVAO("DynamicModelVAO::Staging", true));
@@ -53,14 +56,23 @@ public class WorldViewContext {
 	@Inject
 	private SceneManager sceneManager;
 
+	public ZoneSceneContext sceneContext;
+	public boolean isLoading = true;
+	public boolean isSquashed;
+	@Nullable
+	public float[] projection;
+
 	final int worldViewId;
 	final int sizeX, sizeZ;
 	@Nullable
 	WorldViewStruct uboWorldViewStruct;
-	ZoneSceneContext sceneContext;
+
+	private final float[] lastProjection = Mat4.zero();
+	private final int[] lastOrigin = new int[3];
+	private int lastOrientation;
+
 	Zone[][] zones;
 	GLBuffer vboM;
-	boolean isLoading = true;
 
 	int minLevel, level, maxLevel;
 	Set<Integer> hideRoofIds;
@@ -87,22 +99,93 @@ public class WorldViewContext {
 	) {
 		this.worldViewId = worldView == null ? WorldView.TOPLEVEL : worldView.getId();
 		this.sceneContext = sceneContext;
+		if (sceneContext != null)
+			sceneContext.worldViewContext = this;
 		this.sizeX = worldView == null ? NUM_ZONES : worldView.getSizeX() >> 3;
 		this.sizeZ = worldView == null ? NUM_ZONES : worldView.getSizeY() >> 3;
 		if (worldView != null)
-			uboWorldViewStruct = uboWorldViews.acquire(worldView);
+			uboWorldViewStruct = uboWorldViews.acquire();
 		zones = new Zone[sizeX][sizeZ];
 	}
 
-	public void initialize(RenderState renderState, Injector injector) {
+	public void initialize(Injector injector) {
 		injector.injectMembers(this);
 
-		vaoSceneCmd = new CommandBuffer("WorldViewScene", renderState);
-		vaoDirectionalCmd = new CommandBuffer("WorldViewDirectional", renderState);
+		vaoSceneCmd = new CommandBuffer("WorldViewScene");
+		vaoDirectionalCmd = new CommandBuffer("WorldViewDirectional");
 
 		for (int x = 0; x < sizeX; ++x)
 			for (int z = 0; z < sizeZ; ++z)
 				zones[x][z] = injector.getInstance(Zone.class);
+	}
+
+	void updateProjection(WorldView topLevel) {
+		// Update WorldView projection, or estimate its trajectory when off-screen, if possible
+		if (worldViewId == WorldView.TOPLEVEL)
+			return;
+
+		var worldEntity = topLevel.worldEntities().byIndex(worldViewId);
+		isSquashed = worldEntity != null && worldEntity.isHiddenForOverlap();
+		if (worldEntity == null) {
+			projection = null;
+			return;
+		}
+
+		var worldView = worldEntity.getWorldView();
+		if (worldView.getMainWorldProjection() instanceof FloatProjection) {
+			if (projection == null)
+				projection = new float[16];
+			copyTo(projection, ((FloatProjection) worldView.getMainWorldProjection()).getProjection());
+			copyTo(lastProjection, projection);
+			var origin = worldEntity.getLocalLocation();
+			lastOrigin[0] = origin.getX();
+			lastOrigin[1] = topLevel.getTileHeight(origin.getX(), origin.getY(), topLevel.getPlane());
+			lastOrigin[2] = origin.getY();
+			lastOrientation = worldEntity.getOrientation();
+		} else if (projection != null) {
+			// Approximate the WorldView's projection based on the WorldEntity's position & orientation
+			var origin = worldEntity.getLocalLocation();
+			float angle = (worldEntity.getOrientation() - lastOrientation) * JAU_TO_RAD;
+			float sin = sin(angle);
+			float cos = cos(angle);
+			copyTo(projection, lastProjection);
+			for (int i = 0; i < 16; i += 4) {
+				float x = lastProjection[i];
+				float z = lastProjection[i + 2];
+				if (i == 12) {
+					x -= lastOrigin[0];
+					z -= lastOrigin[2];
+				}
+				projection[i] = cos * x + sin * z;
+				projection[i + 2] = -sin * x + cos * z;
+			}
+			projection[12] += origin.getX();
+			projection[13] += topLevel.getTileHeight(origin.getX(), origin.getY(), topLevel.getPlane()) - lastOrigin[1];
+			projection[14] += origin.getY();
+		}
+
+		if (uboWorldViewStruct != null) {
+			if (projection != null)
+				uboWorldViewStruct.projection.set(projection);
+
+			Scene scene = worldView.getScene();
+			if (scene != null) {
+				uboWorldViewStruct.tint.set(
+					scene.getOverrideHue(), scene.getOverrideSaturation(),
+					scene.getOverrideLuminance(), scene.getOverrideAmount()
+				);
+			} else {
+				uboWorldViewStruct.tint.set(0, 0, 0, 0);
+			}
+		}
+	}
+
+	private static ConcurrentPool<DynamicModelVAO> getDynamicModelVaoPool(int type) {
+		// Choose a pool to both acquire from and release back into, irrespective of the storage buffers setting.
+		// Without this, buffers allocated during acquisition from the staging pool may be erroneously released
+		// back into the non-staging pool, leading to buffers accumulating with unnecessary allocations.
+		return type == VAO_OPAQUE || type == VAO_PLAYER || type == VAO_SHADOW ?
+			DYNAMIC_MODEL_VAO_STAGING_POOL : DYNAMIC_MODEL_VAO_POOL;
 	}
 
 	void initBuffers() {
@@ -121,10 +204,9 @@ public class WorldViewContext {
 
 		long start = System.nanoTime();
 		for (int i = 0; i < VAO_COUNT; i++) {
-			final boolean needsStaging = i == VAO_OPAQUE || i == VAO_PLAYER || i == VAO_SHADOW;
-			final var POOL = needsStaging ? DYNAMIC_MODEL_VAO_STAGING_POOL : DYNAMIC_MODEL_VAO_POOL;
+			var pool = getDynamicModelVaoPool(i);
 			for (int k = 0; k < FRAMES_IN_FLIGHT; k++) {
-				DynamicModelVAO dynamicModelVao = dynamicModelVaos[k][i] = POOL.acquire();
+				DynamicModelVAO dynamicModelVao = dynamicModelVaos[k][i] = pool.acquire();
 				if (dynamicModelVao.getVao() == 0)
 					dynamicModelVao.initialize();
 				dynamicModelVao.bindMetadataVAO(vboM);
@@ -181,13 +263,14 @@ public class WorldViewContext {
 		}
 
 		if (!alphaZones.isEmpty()) {
-			alphaZones.sort(alphaSortComparator);
-			for (Zone z : alphaZones)
-				z.alphaStaticModelSort(camera);
+			quickSort(alphaZones, alphaSortComparator);
+			for (int i = 0; i < alphaZones.size(); i++)
+				alphaZones.get(i).alphaStaticModelSort(camera);
 		}
 	}
 
-	void handleZoneSwap(int zx, int zz, boolean queue) {
+	// Synchronize creation of delayed upload jobs with zone swaps and invalidation
+	synchronized void handleZoneSwap(int zx, int zz, boolean queue) {
 		Zone curZone = zones[zx][zz];
 		ZoneUploadJob uploadTask = curZone.uploadJob;
 		if (uploadTask == null)
@@ -195,7 +278,7 @@ public class WorldViewContext {
 
 		if (!uploadTask.isQueued()) {
 			if (queue && uploadTask.revealAfterTimestampMs < System.currentTimeMillis()) {
-				log.trace("queueing zone({}): [{}-{},{}]", uploadTask.zone.hashCode(), worldViewId, zx, zz);
+				log.trace("queueing zone({}): [{}-{},{}]", uploadTask.zoneBeingUploaded.hashCode(), worldViewId, zx, zz);
 				uploadTask.revealAfterTimestampMs = 0;
 				uploadTask.queue(streamingGroup, sceneManager.getGenerateSceneDataTask());
 			}
@@ -205,11 +288,23 @@ public class WorldViewContext {
 		if (uploadTask.isDone()) {
 			curZone.uploadJob = null;
 			if (uploadTask.ranToCompletion() && !uploadTask.wasCancelled()) {
-				log.trace("swapping zone({}): [{}-{},{}]", uploadTask.zone.hashCode(), worldViewId, zx, zz);
+				Zone uploadedZone = uploadTask.zoneBeingUploaded;
+				if (uploadedZone == null) {
+					log.error(
+						"Completed zone upload job [{}] has already been released: [{}-{},{}]",
+						uploadTask.hashCode(),
+						worldViewId,
+						zx,
+						zz
+					);
+					curZone.rebuild = true;
+					return;
+				}
+				log.trace("swapping zone({}): [{}-{},{}]", uploadedZone.hashCode(), worldViewId, zx, zz);
 
 				Zone prevZone = curZone;
 				// Swap the zone out with the one we just uploaded
-				zones[zx][zz] = curZone = uploadTask.zone;
+				zones[zx][zz] = curZone = uploadedZone;
 				clientThread.invoke(curZone::unmap);
 
 				if (prevZone != curZone) {
@@ -272,22 +367,25 @@ public class WorldViewContext {
 		sceneLoadGroup.cancel();
 		streamingGroup.cancel();
 
-		if (sceneContext != null)
+		if (sceneContext != null) {
+			sceneContext.worldViewContext = null;
 			sceneContext.destroy();
+		}
 		sceneContext = null;
 
 		if (uboWorldViewStruct != null)
 			uboWorldViewStruct.free();
 		uboWorldViewStruct = null;
+		projection = null;
+		isSquashed = false;
 
 		for (int i = 0; i < VAO_COUNT; i++) {
+			var pool = getDynamicModelVaoPool(i);
 			for (int k = 0; k < FRAMES_IN_FLIGHT; k++) {
 				if (dynamicModelVaos[k][i] == null)
 					continue;
-				final var POOL = dynamicModelVaos[k][i].hasStagingBuffer() ?
-					DYNAMIC_MODEL_VAO_STAGING_POOL :
-					DYNAMIC_MODEL_VAO_POOL;
-				POOL.recycle(dynamicModelVaos[k][i]);
+				pool.recycle(dynamicModelVaos[k][i]);
+				dynamicModelVaos[k][i] = null;
 			}
 		}
 
@@ -309,11 +407,14 @@ public class WorldViewContext {
 				invalidateZone(x, z);
 	}
 
-	void invalidateZone(int zx, int zz) {
+	// Synchronize creation of delayed upload jobs with zone swaps and invalidation
+	synchronized void invalidateZone(int zx, int zz) {
 		Zone curZone = zones[zx][zz];
 		long revealAfterTimestampMs = 0;
-		if (curZone.uploadJob != null) {
-			Zone pendingZone = curZone.uploadJob.zone;
+		ZoneUploadJob previousUpload = curZone.uploadJob;
+		if (previousUpload != null) {
+			curZone.uploadJob = null;
+			Zone pendingZone = previousUpload.zoneBeingUploaded;
 			log.trace(
 				"Invalidate Zone({}) - Cancelled upload task: [{}-{},{}] task zone({})",
 				curZone.hashCode(),
@@ -322,9 +423,9 @@ public class WorldViewContext {
 				zz,
 				pendingZone.hashCode()
 			);
-			revealAfterTimestampMs = curZone.uploadJob.revealAfterTimestampMs;
-			curZone.uploadJob.cancel();
-			curZone.uploadJob.release();
+			revealAfterTimestampMs = previousUpload.revealAfterTimestampMs;
+			previousUpload.cancel();
+			previousUpload.release();
 
 			if (pendingZone != curZone)
 				DestructibleHandler.destroy(pendingZone);
@@ -333,7 +434,7 @@ public class WorldViewContext {
 		Zone newZone = injector.getInstance(Zone.class);
 		newZone.dirty = zones[zx][zz].dirty;
 
-		curZone.uploadJob = ZoneUploadJob.build(this, sceneContext, newZone, false, zx, zz);
+		curZone.setUploadJob(ZoneUploadJob.build(this, sceneContext, newZone, false, zx, zz));
 		curZone.uploadJob.revealAfterTimestampMs = revealAfterTimestampMs;
 
 		// Queue right away, so we can wait for it while in the POH in order to hide building mode placeholders

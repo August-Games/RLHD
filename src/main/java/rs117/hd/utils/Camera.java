@@ -3,11 +3,12 @@ package rs117.hd.utils;
 import java.util.Arrays;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.*;
 
 import static rs117.hd.utils.MathUtils.*;
 
 @Slf4j
-public final class Camera {
+public final class Camera implements Projection {
 	private static final int PROJECTION_MATRIX_DIRTY = 1;
 	private static final int VIEW_MATRIX_DIRTY = 1 << 1;
 	private static final int VIEW_PROJ_MATRIX_DIRTY = 1 << 2;
@@ -50,6 +51,20 @@ public final class Camera {
 	private boolean orthographic = false;
 	@Getter
 	private boolean reverseZ = false;
+
+	@Override
+	public float[] project(float x, float y, float z) {
+		return project(x, y, z, new float[3]);
+	}
+
+	@Override
+	public float[] project(float x, float y, float z, float[] out) {
+		out[0] = x;
+		out[1] = y;
+		out[2] = z;
+		// This is only the view transform, not projection, but we only use it for CPU-side back-face culling
+		return transformPoint(out, out);
+	}
 
 	public boolean isDirty() {
 		return dirtyFlags != 0;
@@ -224,11 +239,9 @@ public final class Camera {
 	}
 
 	public Camera translate(float[] translation) {
-		if (translation[0] != 0.0f || translation[1] != 0.0f || translation[2] != 0.0f) {
+		if (translation[0] != 0 || translation[1] != 0 || translation[2] != 0) {
 			synchronized (this) {
-				position[0] += translation[0];
-				position[1] += translation[1];
-				position[2] += translation[2];
+				add(position, position, translation);
 				dirtyFlags |= VIEW_CHANGED;
 			}
 		}

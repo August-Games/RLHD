@@ -2,15 +2,19 @@ package rs117.hd.renderer.zone;
 
 import java.nio.IntBuffer;
 import lombok.extern.slf4j.Slf4j;
+import rs117.hd.utils.buffer.GLMappedBufferIntWriter.ReservedView;
 import rs117.hd.utils.buffer.GpuIntBuffer;
+import rs117.hd.utils.collections.PooledArrayType;
 
 import static rs117.hd.utils.MathUtils.*;
 
 @Slf4j
 public final class VertexWriteCache {
 	private IntBuffer outputBuffer;
+	private int outputOffset;
 
 	private final String name;
+	private final int initialCapacity;
 	private final int maxCapacity;
 	private int[] stagingBuffer;
 	private int stagingPosition;
@@ -21,13 +25,28 @@ public final class VertexWriteCache {
 
 	public VertexWriteCache(String name, int initialCapacity, int maxCapacity) {
 		this.name = name;
+		this.initialCapacity = initialCapacity;
 		this.maxCapacity = maxCapacity;
-		stagingBuffer = new int[initialCapacity];
 	}
 
 	public void setOutputBuffer(IntBuffer outputBuffer) {
 		this.outputBuffer = outputBuffer;
+		outputOffset = 0;
 		stagingPosition = 0;
+		stagingBuffer = PooledArrayType.INT.ensureCapacity(stagingBuffer, initialCapacity);
+	}
+
+	private void setOutputView(ReservedView view) {
+		setOutputBuffer(view.getBuffer());
+		outputOffset = view.getPositionOffsetInts();
+	}
+
+	private void release(){
+		flush();
+
+		if (stagingBuffer != null)
+			PooledArrayType.INT.release(stagingBuffer);
+		stagingBuffer = null;
 	}
 
 	private void flushAndGrow() {
@@ -35,7 +54,7 @@ public final class VertexWriteCache {
 		flush();
 
 		if (stagingBuffer.length < maxCapacity)
-			stagingBuffer = new int[min(stagingBuffer.length * 2, maxCapacity)];
+			stagingBuffer = PooledArrayType.INT.ensureCapacity(stagingBuffer, min(stagingBuffer.length * 2, maxCapacity));
 	}
 
 	public int putFace(
@@ -46,7 +65,7 @@ public final class VertexWriteCache {
 		if (stagingPosition + 9 > stagingBuffer.length)
 			flushAndGrow();
 
-		final int textureFaceIdx = (outputBuffer.position() + stagingPosition) / 3;
+		final int textureFaceIdx = (outputOffset + outputBuffer.position() + stagingPosition) / 3;
 		final int[] stagingBuffer = this.stagingBuffer;
 		final int stagingPosition = this.stagingPosition;
 
@@ -67,7 +86,7 @@ public final class VertexWriteCache {
 		return textureFaceIdx;
 	}
 
-	public void putVertex(
+	public void putDynamicVertex(
 		int x, int y, int z,
 		float u, float v, float w,
 		int nx, int ny, int nz,
@@ -95,7 +114,7 @@ public final class VertexWriteCache {
 		int x, int y, int z,
 		float u, float v, float w,
 		int nx, int ny, int nz,
-		int textureFaceIdx
+		int textureFaceIdx, boolean windingReversed
 	) {
 		if (stagingPosition + 7 > stagingBuffer.length)
 			flushAndGrow();
@@ -110,7 +129,7 @@ public final class VertexWriteCache {
 		// Unnormalized normals, assumed to be within short max
 		stagingBuffer[stagingPosition + 4] = (ny & 0xFFFF) << 16 | nx & 0xFFFF;
 		stagingBuffer[stagingPosition + 5] = nz & 0xFFFF;
-		stagingBuffer[stagingPosition + 6] = textureFaceIdx;
+		stagingBuffer[stagingPosition + 6] = (windingReversed ? 1 << 31 : 0) | textureFaceIdx;
 
 		this.stagingPosition += 7;
 	}
@@ -119,12 +138,17 @@ public final class VertexWriteCache {
 		if (stagingPosition == 0 || outputBuffer == null)
 			return;
 
-		outputBuffer.put(stagingBuffer, 0, stagingPosition);
-		stagingPosition = 0;
+		try {
+			outputBuffer.put(stagingBuffer, 0, stagingPosition);
+		} catch (Exception e) {
+			log.error("Failed to flush vertex write cache {} written: {} remaining: {}", name, stagingPosition, outputBuffer.remaining(), e);
+		} finally {
+			stagingPosition = 0;
+		}
 	}
 
 	public static class Collection {
-		private static final int CAPACITY = (int) (128 * KiB / Integer.BYTES);
+		private static final int CAPACITY = (int) (32 * KiB / Integer.BYTES);
 
 		public final VertexWriteCache opaque = new VertexWriteCache("OPAQUE", CAPACITY);
 		public final VertexWriteCache alpha = new VertexWriteCache("ALPHA", CAPACITY);
@@ -132,13 +156,13 @@ public final class VertexWriteCache {
 		public final VertexWriteCache alphaTex = new VertexWriteCache("ALPHA_TEX", CAPACITY);
 		public boolean useAlphaBuffer;
 
-		public void setOutputBuffers(IntBuffer opaque, IntBuffer alpha, IntBuffer opaqueTex, IntBuffer alphaTex) {
-			this.opaque.setOutputBuffer(opaque);
-			this.opaqueTex.setOutputBuffer(opaqueTex);
+		public void setOutputBuffers(ReservedView opaque, ReservedView alpha, ReservedView opaqueTex, ReservedView alphaTex) {
+			this.opaque.setOutputView(opaque);
+			this.opaqueTex.setOutputView(opaqueTex);
 			useAlphaBuffer = alpha != opaque && alphaTex != opaqueTex;
 			if (useAlphaBuffer) {
-				this.alpha.setOutputBuffer(alpha);
-				this.alphaTex.setOutputBuffer(alphaTex);
+				this.alpha.setOutputView(alpha);
+				this.alphaTex.setOutputView(alphaTex);
 			} else {
 				this.alpha.setOutputBuffer(null);
 				this.alphaTex.setOutputBuffer(null);
@@ -158,11 +182,23 @@ public final class VertexWriteCache {
 			}
 		}
 
-		public void flush() {
-			opaque.flush();
-			alpha.flush();
-			opaqueTex.flush();
-			alphaTex.flush();
+		public VertexWriteCache getVertexBuffer() { return opaque; }
+
+		public VertexWriteCache getTextureBuffer() { return opaqueTex; }
+
+		public VertexWriteCache getVertexBuffer(boolean hasAlpha) {
+			return useAlphaBuffer && hasAlpha ? alpha : opaque;
+		}
+
+		public VertexWriteCache getTextureBuffer(boolean hasAlpha) {
+			return useAlphaBuffer && hasAlpha ? alphaTex : opaqueTex;
+		}
+
+		public void release() {
+			opaque.release();
+			alpha.release();
+			opaqueTex.release();
+			alphaTex.release();
 		}
 	}
 }
