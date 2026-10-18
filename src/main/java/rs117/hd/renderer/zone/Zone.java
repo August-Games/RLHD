@@ -5,11 +5,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.function.ToIntFunction;
 import javax.annotation.Nullable;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
@@ -27,17 +24,25 @@ import rs117.hd.utils.DestructibleHandler;
 import rs117.hd.utils.HDUtils;
 import rs117.hd.utils.buffer.GLBuffer;
 import rs117.hd.utils.buffer.GLTextureBuffer;
+import rs117.hd.utils.collections.ConcurrentPool;
+import rs117.hd.utils.collections.Int2IntHashMap;
+import rs117.hd.utils.collections.IntHashSet;
+import rs117.hd.utils.collections.PooledArrayType;
 
+import static net.runelite.api.Constants.*;
 import static org.lwjgl.opengl.GL33C.*;
-import static rs117.hd.HdPlugin.GL_CAPS;
 import static rs117.hd.HdPlugin.SUPPORTS_INDIRECT_DRAW;
+import static rs117.hd.HdPlugin.SUPPORTS_MULTI_INDIRECT_DRAW;
 import static rs117.hd.HdPlugin.checkGLErrors;
 import static rs117.hd.renderer.zone.ZoneRenderer.TEXTURE_UNIT_TEXTURED_FACES;
 import static rs117.hd.renderer.zone.ZoneRenderer.eboAlpha;
 import static rs117.hd.utils.MathUtils.*;
+import static rs117.hd.utils.collections.Util.quickSort;
 
 @Slf4j
 public class Zone implements Destructible {
+	private static final ConcurrentPool<AlphaModel> ALPHA_MODEL_POOL = new ConcurrentPool<>(AlphaModel::new);
+
 	@Inject
 	private Client client;
 
@@ -58,9 +63,13 @@ public class Zone implements Destructible {
 	// sceneOffset int vec2(x, y)
 	public static final int METADATA_SIZE = 12;
 
-	public static final int LEVEL_WATER_SURFACE = 4;
+	public static int LEVEL_COUNT = MAX_Z;
+	public static final int LEVEL_TERRAIN = LEVEL_COUNT++;
+	public static final int LEVEL_WATER_SURFACE = LEVEL_COUNT++;
+	public static final int LEVEL_GAP_FILLER = LEVEL_COUNT++;
 
 	public int glVao;
+	int modelCount;
 	int bufLen;
 	int dist;
 
@@ -79,16 +88,23 @@ public class Zone implements Destructible {
 	public boolean dirty; // whether the zone has temporary modifications
 	public boolean hasWater; // whether the zone has any water tiles
 	public boolean onlyWater; // whether the zone only contains water tiles
-	public boolean inSceneFrustum; // whether the zone is visible to the scene camera
+	public boolean hasGapFiller; // whether the zone has any gap filler geometry
+	public boolean inSceneFrustum = true; // whether the zone is visible to the scene camera
 	public boolean inShadowFrustum; // whether the zone casts shadows into the visible scene
 	public boolean isFirstLoadingAttempt = true;
 
-	public HashSet<Integer> animatedDynamicObjectIds = new HashSet<>();
+	public IntHashSet animatedDynamicObjectIds = new IntHashSet();
 
 	final StaticAlphaSortingJob alphaSortingJob = new StaticAlphaSortingJob();
 	ZoneUploadJob uploadJob;
 
-	int[] levelOffsets = new int[5]; // buffer pos in ints for the end of the level
+	void setUploadJob(ZoneUploadJob uploadJob) {
+		this.uploadJob = uploadJob;
+		if (uploadJob != null)
+			uploadJob.zoneToBeReplaced = this;
+	}
+
+	int[] levelOffsets = new int[LEVEL_COUNT]; // buffer pos in ints for the end of the level
 
 	int[][] rids;
 	int[][] roofStart;
@@ -172,7 +188,7 @@ public class Zone implements Destructible {
 
 		if (uploadJob != null) {
 			uploadJob.cancel();
-			DestructibleHandler.destroy(uploadJob.zone);
+			DestructibleHandler.destroy(uploadJob.zoneBeingUploaded);
 			uploadJob = null;
 		}
 
@@ -188,6 +204,7 @@ public class Zone implements Destructible {
 		cull = false;
 		hasWater = false;
 		onlyWater = false;
+		hasGapFiller = false;
 		inSceneFrustum = false;
 		inShadowFrustum = false;
 
@@ -234,7 +251,7 @@ public class Zone implements Destructible {
 
 		// Position
 		glEnableVertexAttribArray(0);
-		glVertexAttribPointer(0, 3, GL_SHORT, false, VERT_SIZE, 0);
+		glVertexAttribPointer(0, 4, GL_SHORT, false, VERT_SIZE, 0);
 
 		// UVs
 		glEnableVertexAttribArray(1);
@@ -283,16 +300,15 @@ public class Zone implements Destructible {
 		}
 	}
 
-	void updateRoofs(Map<Integer, Integer> updates) {
+	void updateRoofs(Int2IntHashMap updates) {
 		for (int level = 0; level < 4; ++level) {
 			for (int i = 0; i < rids[level].length; ++i) {
 				rids[level][i] = updates.getOrDefault(rids[level][i], rids[level][i]);
 			}
 		}
 
-		for (AlphaModel m : alphaModels) {
-			m.rid = (short) (int) updates.getOrDefault((int) m.rid, (int) m.rid);
-		}
+		for (AlphaModel m : alphaModels)
+			m.rid = (short) updates.getOrDefault(m.rid, m.rid);
 	}
 
 	private static final int NUM_DRAW_RANGES = 512;
@@ -378,7 +394,7 @@ public class Zone implements Destructible {
 	void renderOpaqueLevel(CommandBuffer cmd, int level) {
 		drawIdx = 0;
 
-		pushRange(this.levelOffsets[level - 1], this.levelOffsets[level]);
+		pushRange(level > 0 ? this.levelOffsets[level - 1] : 0, this.levelOffsets[level]);
 
 		if (drawIdx == 0)
 			return;
@@ -391,6 +407,8 @@ public class Zone implements Destructible {
 
 	private static void pushRange(int start, int end) {
 		assert end >= start;
+		if (end <= start)
+			return;
 
 		if (drawIdx > 0 && drawEnd[drawIdx - 1] == start) {
 			drawEnd[drawIdx - 1] = end;
@@ -403,7 +421,7 @@ public class Zone implements Destructible {
 		}
 	}
 
-	public static class AlphaModel {
+	public static final class AlphaModel {
 		int id;
 		ModelOverride modelOverride;
 		int startpos, endpos;
@@ -419,11 +437,13 @@ public class Zone implements Destructible {
 		// only set for static geometry as they require sorting
 		int radius;
 		int[] packedFaces;
-		int[] sortedFaces;
-		int sortedFacesLen;
+		int[] doubleSidedBitSet;
+		char doubleSidedCount;
 
 		int dist;
 		int asyncSortIdx = -1;
+		int sortedFacesLen;
+		int[] tempSortedFaces;
 
 		static final int SKIP = 1; // temporary model is in a closer zone
 		static final int TEMP = 2; // temporary model added to a closer zone
@@ -438,7 +458,13 @@ public class Zone implements Destructible {
 		}
 
 		boolean isTemp() {
-			return packedFaces == null || sortedFaces == null;
+			return packedFaces == null;
+		}
+
+		int calculateDepth(int cx, int cy, int cz, int zx, int zz) {
+			final int mx = (x + ((zx - zofx) << 10));
+			final int mz = (z + ((zz - zofz) << 10));
+			return (mx - cx) * (mx - cx) + (y - cy) * (y - cy) + (mz - cz) * (mz - cz);
 		}
 
 		void setView(DynamicModelVAO.View view) {
@@ -448,8 +474,6 @@ public class Zone implements Destructible {
 			endpos = view.getEndOffset();
 		}
 	}
-
-	static final ConcurrentLinkedQueue<AlphaModel> modelCache = new ConcurrentLinkedQueue<>();
 
 	void addAlphaModel(
 		HdPlugin plugin,
@@ -546,9 +570,21 @@ public class Zone implements Destructible {
 			shift++;
 		}
 
-		int[] packedFaces = m.packedFaces = new int[(endpos - startpos) / ((3 * VERT_SIZE) >> 2)];
+		final int intsPerVertex = VERT_SIZE / Integer.BYTES;
+		final int writtenAlphaFaceCount = (endpos - startpos) / (3 * intsPerVertex);
+		final int bucketCapacity = ceil(writtenAlphaFaceCount / 32.0f);
+
+		final int[] packedFaces = PooledArrayType.INT.borrow(writtenAlphaFaceCount);
+		final int[] doubleSidedBitSet = PooledArrayType.INT.borrow(bucketCapacity);
+
+		Arrays.fill(doubleSidedBitSet, 0, bucketCapacity, 0);
+
+		final Material baseMaterial = modelOverride.baseMaterial;
+		final Material textureMaterial = modelOverride.textureMaterial;
+
 		int radius = 0;
-		int bufferIdx = 0;
+		char bufferIdx = 0;
+		char doubleSidedCount = 0;
 		for (int f = 0; f < faceCount; ++f) {
 			if (color3[f] == -2)
 				continue;
@@ -557,15 +593,17 @@ public class Zone implements Destructible {
 			if (plugin.configHideFakeShadows && modelOverride.hideVanillaShadows && HDUtils.isBakedGroundShading(model, f))
 				continue;
 
-			int transparency = transparencies != null ? transparencies[f] & 0xFF : 0;
-			int textureId = faceTextures != null ? faceTextures[f] : -1;
-
+			Material material = baseMaterial;
 			ModelOverride faceOverride = modelOverride;
 
-			Material material = modelOverride.baseMaterial;
+			int transparency = SceneUploader.readFaceTransparency(model.getTransparency(), transparencies, f);
+			if (transparency == 255)
+				continue;
+
+			int textureId = faceTextures != null ? faceTextures[f] : -1;
 			if (textureId != -1) {
 				if (modelOverride.textureMaterial != Material.NONE) {
-					material = modelOverride.textureMaterial;
+					material = textureMaterial;
 				} else {
 					material = materialManager.fromVanillaTexture(textureId);
 					if (modelOverride.materialOverrides != null) {
@@ -588,13 +626,16 @@ public class Zone implements Destructible {
 			if (faceOverride.hide)
 				continue;
 
+			if (faceOverride.modifiesAlpha)
+				transparency = 255 - faceOverride.modifyAlpha(255 - transparency);
+
 			boolean hasAlpha = material.hasTransparency || transparency != 0;
 			if (!hasAlpha)
 				continue;
 
-			int fx = (((int) (vertexX[indices1[f]] + vertexX[indices2[f]] + vertexX[indices3[f]]) / 3) - cx) >> shift;
-			int fy = (((int) (vertexY[indices1[f]] + vertexY[indices2[f]] + vertexY[indices3[f]]) / 3) - cy) >> shift;
-			int fz = (((int) (vertexZ[indices1[f]] + vertexZ[indices2[f]] + vertexZ[indices3[f]]) / 3) - cz) >> shift;
+			final int fx = (((int) (vertexX[indices1[f]] + vertexX[indices2[f]] + vertexX[indices3[f]]) / 3) - cx) >> shift;
+			final int fy = (((int) (vertexY[indices1[f]] + vertexY[indices2[f]] + vertexY[indices3[f]]) / 3) - cy) >> shift;
+			final int fz = (((int) (vertexZ[indices1[f]] + vertexZ[indices2[f]] + vertexZ[indices3[f]]) / 3) - cz) >> shift;
 
 			radius = Math.max(radius, fx * fx + fy * fy + fz * fz);
 
@@ -615,13 +656,16 @@ public class Zone implements Destructible {
 			}
 
 			packedFaces[bufferIdx] = ((fx & ((1 << 11) - 1)) << 21)
-									 | ((fy & ((1 << 10) - 1)) << 11)
-									 | (fz & ((1 << 11) - 1));
+			                         | ((fy & ((1 << 10) - 1)) << 11)
+			                         | (fz & ((1 << 11) - 1));
+
+			if (faceOverride.doubleSidedFaces || material.doubleSidedFaces) {
+				doubleSidedBitSet[bufferIdx >> 5] |= 1 << (bufferIdx & 31);
+				doubleSidedCount++;
+			}
+
 			bufferIdx++;
 		}
-
-		m.radius = 2 + (int) Math.sqrt(radius);
-		m.sortedFaces = new int[bufferIdx * 3];
 
 		if (bufferIdx == 0) {
 			ModelRenderDiagnostics.captureWarning(
@@ -635,6 +679,8 @@ public class Zone implements Destructible {
 					.scratchLimits()
 					.extra("packedFaceCapacity", packedFaces.length)
 			);
+			PooledArrayType.INT.release(packedFaces);
+			PooledArrayType.INT.release(doubleSidedBitSet);
 			return;
 		}
 
@@ -642,13 +688,19 @@ public class Zone implements Destructible {
 		// Normally these will be equal, but transparency is used to hide faces in the TzHaar reskin
 		assert bufferIdx <= packedFaces.length : String.format("%d > %d", bufferIdx, packedFaces.length);
 
+		m.radius = 2 + (int) Math.sqrt(radius);
+		m.packedFaces = Arrays.copyOf(packedFaces, bufferIdx);
+		m.doubleSidedBitSet = doubleSidedCount > 0 ? Arrays.copyOf(doubleSidedBitSet, ceil(bufferIdx / 32.0f)) : null;
+		m.doubleSidedCount = doubleSidedCount;
+
 		alphaModels.add(m);
+
+		PooledArrayType.INT.release(packedFaces);
+		PooledArrayType.INT.release(doubleSidedBitSet);
 	}
 
 	synchronized AlphaModel requestTempAlphaModel(ModelOverride modelOverride, int level, int x, int y, int z) {
-		AlphaModel m = modelCache.poll();
-		if (m == null)
-			m = new AlphaModel();
+		AlphaModel m = ALPHA_MODEL_POOL.acquire();
 		m.id = -1;
 		m.modelOverride = modelOverride;
 		m.x = (short) x;
@@ -665,17 +717,23 @@ public class Zone implements Destructible {
 	synchronized void postAlphaPass() {
 		sortedAlphaFacesUpload.waitForCompletion();
 		alphaSortingJob.waitForCompletion();
+		alphaSortingJob.reset();
 
 		for (int i = alphaModels.size() - 1; i >= 0; --i) {
 			AlphaModel m = alphaModels.get(i);
+			m.asyncSortIdx = -1;
+			m.flags &= ~(AlphaModel.SKIP | AlphaModel.SORT_COMPLETED);
+
 			if (m.isTemp() || (m.flags & AlphaModel.TEMP) != 0) {
 				alphaModels.remove(i);
 				m.packedFaces = null;
-				m.sortedFaces = null;
-				modelCache.add(m);
+				m.doubleSidedBitSet = null;
+				ALPHA_MODEL_POOL.recycle(m);
 			}
-			m.asyncSortIdx = -1;
-			m.flags &= ~(AlphaModel.SKIP | AlphaModel.SORT_COMPLETED);
+
+			if (m.tempSortedFaces != null)
+				PooledArrayType.INT.release(m.tempSortedFaces);
+			m.tempSortedFaces = null;
 		}
 	}
 
@@ -690,31 +748,34 @@ public class Zone implements Destructible {
 	private static int lastTboF;
 	private static int lastzx, lastzz;
 
-	private static final class AlphaSortPredicate implements ToIntFunction<AlphaModel> {
-		int cx, cy, cz;
+	static class AlphaModelComparator implements Comparator<AlphaModel> {
 		int zx, zz;
+		int cx, cy, cz;
 
 		@Override
-		public int applyAsInt(AlphaModel m) {
-			final int mx = m.x + ((zx - m.zofx) << 10);
-			final int mz = m.z + ((zz - m.zofz) << 10);
-			final int my = m.y;
-			return (mx - cx) * (mx - cx) + (my - cy) * (my - cy) + (mz - cz) * (mz - cz);
+		public int compare(AlphaModel modelA, AlphaModel modelB) {
+			return Integer.compare(
+				modelB.calculateDepth(cx, cy, cz, zx, zz),
+				modelA.calculateDepth(cx, cy, cz, zx, zz)
+			);
 		}
 	}
 
-	private final AlphaSortPredicate alphaSortPred = new AlphaSortPredicate();
-	private final Comparator<AlphaModel> alphaSortComparator = Comparator.comparingInt(alphaSortPred).reversed();
-
+	private static final AlphaModelComparator alphaModelComparator = new AlphaModelComparator();
 	private final EboAlphaWriterJob sortedAlphaFacesUpload = new EboAlphaWriterJob();
 
 	synchronized void alphaSort(int zx, int zz, Camera camera) {
-		alphaSortPred.cx = (int) camera.getPositionX();
-		alphaSortPred.cy = (int) camera.getPositionY();
-		alphaSortPred.cz = (int) camera.getPositionZ();
-		alphaSortPred.zx = zx;
-		alphaSortPred.zz = zz;
-		alphaModels.sort(alphaSortComparator);
+		final int alphaModelCount = alphaModels.size();
+		if (alphaModelCount <= 1)
+			return;
+
+		alphaModelComparator.cx = (int) camera.getPositionX();
+		alphaModelComparator.cy = (int) camera.getPositionY();
+		alphaModelComparator.cz = (int) camera.getPositionZ();
+		alphaModelComparator.zx = zx;
+		alphaModelComparator.zz = zz;
+
+		quickSort(alphaModels, alphaModelComparator);
 	}
 
 	void alphaStaticModelSort(Camera camera) {
@@ -724,6 +785,7 @@ public class Zone implements Destructible {
 				continue;
 
 			m.dist = dist;
+			m.tempSortedFaces = PooledArrayType.INT.borrow((m.packedFaces.length + m.doubleSidedCount) * 3);
 			alphaSortingJob.addAlphaModel(m);
 		}
 		alphaSortingJob.queue(camera);
@@ -735,7 +797,7 @@ public class Zone implements Destructible {
 		int zz,
 		int level,
 		WorldViewContext ctx,
-		boolean isShadowPass,
+		boolean depthOnly,
 		boolean includeRoof
 	) {
 		if (alphaModels.isEmpty())
@@ -752,9 +814,7 @@ public class Zone implements Destructible {
 
 		drawIdx = 0;
 
-		cmd.DepthMask(false);
-
-		if (!isShadowPass)
+		if (!depthOnly)
 			sortedAlphaFacesUpload.waitForCompletion();
 
 		int eboAlphaStart = eboAlphaOffset = ZoneRenderer.eboAlphaWriter.getWrittenInts();
@@ -771,7 +831,7 @@ public class Zone implements Destructible {
 			if (m.isTemp()) {
 				// these are already sorted and so just requires a glMultiDrawArrays() from the active vao
 				drawMode = TEMP;
-			} else if (isShadowPass || m.asyncSortIdx < 0) {
+			} else if (depthOnly || m.asyncSortIdx < 0) {
 				drawMode = STATIC_UNSORTED;
 			}
 
@@ -801,7 +861,7 @@ public class Zone implements Destructible {
 					alphaSortingJob.waitForCompletion(10);
 			}
 
-			if (m.sortedFaces == null || m.sortedFacesLen <= 0)
+			if (m.tempSortedFaces == null || m.sortedFacesLen <= 0)
 				continue;
 
 			sortedAlphaFacesUpload.alphaModels.add(m);
@@ -817,8 +877,6 @@ public class Zone implements Destructible {
 		}
 
 		flush(cmd);
-
-		cmd.DepthMask(true);
 	}
 
 	private void flush(CommandBuffer cmd) {
@@ -829,7 +887,7 @@ public class Zone implements Destructible {
 				cmd.BindVertexArray(lastVao, eboAlpha);
 				cmd.BindTextureUnit(GL_TEXTURE_BUFFER, lastTboF, TEXTURE_UNIT_TEXTURED_FACES);
 				// The EBO & IDO is bound by in ZoneRenderer
-				if (GL_CAPS.OpenGL40 && SUPPORTS_INDIRECT_DRAW) {
+				if (SUPPORTS_INDIRECT_DRAW) {
 					cmd.DrawElementsIndirect(GL_TRIANGLES, vertexCount, (int) (byteOffset / 4L), ZoneRenderer.indirectDrawCmdsStaging);
 				} else {
 					cmd.DrawElements(GL_TRIANGLES, vertexCount, byteOffset);
@@ -841,13 +899,13 @@ public class Zone implements Destructible {
 			cmd.BindVertexArray(lastVao);
 			cmd.BindTextureUnit(GL_TEXTURE_BUFFER, lastTboF, TEXTURE_UNIT_TEXTURED_FACES);
 			if (drawIdx == 1) {
-				if (GL_CAPS.OpenGL40 && SUPPORTS_INDIRECT_DRAW) {
+				if (SUPPORTS_INDIRECT_DRAW) {
 					cmd.DrawArraysIndirect(GL_TRIANGLES, drawOff[0], drawEnd[0], ZoneRenderer.indirectDrawCmdsStaging);
 				} else {
 					cmd.DrawArrays(GL_TRIANGLES, drawOff[0], drawEnd[0]);
 				}
 			} else {
-				if (GL_CAPS.OpenGL43 && SUPPORTS_INDIRECT_DRAW) {
+				if (SUPPORTS_MULTI_INDIRECT_DRAW) {
 					cmd.MultiDrawArraysIndirect(GL_TRIANGLES, glDrawOffset, glDrawLength, drawIdx, ZoneRenderer.indirectDrawCmdsStaging);
 				} else {
 					cmd.MultiDrawArrays(GL_TRIANGLES, glDrawOffset, glDrawLength, drawIdx);
@@ -899,9 +957,7 @@ public class Zone implements Destructible {
 				assert z != null;
 				assert z != this;
 
-				AlphaModel m2 = modelCache.poll();
-				if (m2 == null)
-					m2 = new AlphaModel();
+				AlphaModel m2 = ALPHA_MODEL_POOL.acquire();
 				m2.id = m.id;
 				m2.modelOverride = m.modelOverride;
 				m2.startpos = m.startpos;
@@ -921,9 +977,11 @@ public class Zone implements Destructible {
 				m2.zofz = (byte) (closestZoneZ - zz);
 
 				m2.packedFaces = m.packedFaces;
+				m2.doubleSidedBitSet = m.doubleSidedBitSet;
 				m2.radius = m.radius;
+				m2.doubleSidedCount = m.doubleSidedCount;
 				m2.asyncSortIdx = m.asyncSortIdx;
-				m2.sortedFaces = m.sortedFaces;
+				m2.tempSortedFaces = m.tempSortedFaces;
 				m2.sortedFacesLen = m.sortedFacesLen;
 
 				m2.flags = AlphaModel.TEMP;
